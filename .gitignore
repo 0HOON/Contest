@@ -1,0 +1,9 @@
+# jupyter notebooks #
+#################
+*.ipynb
+
+
+# datasets #
+#########
+Dacon/Growth_prediction/data
+*.csv

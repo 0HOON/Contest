@@ -208,3 +208,127 @@ df_pred
 # -
 
 df_pred.to_csv('submission.csv', index=False)
+
+# +
+import lightgbm as lgb
+
+train_data_lgb = lgb.Dataset(df_train_onehot[:train_n].values, label=target_train[:train_n].values)
+val_data_lgb = train_data_lgb.create_valid(df_train_onehot[train_n:].values, label=target_train[train_n:].values)
+
+# +
+param = {'num_leaves': 31, 'objective': 'binary', 'device_type': 'gpu'}
+n_round = 100
+
+record = {}
+record_eval = lgb.record_evaluation(record)
+early = lgb.early_stopping(20)
+
+bst = lgb.train(param, train_data_lgb, n_round, valid_sets=[val_data_lgb], callbacks=[record_eval, early])
+bst.save_model('lgb_model.txt', num_iteration=bst.best_iteration)
+print('best score: {}'.format(bst.best_score))
+# -
+
+lgb_pred = bst.predict(df_test_onehot.values)
+
+df_pred_lgb = pd.DataFrame(data=lgb_pred, columns=['target'])
+df_pred_lgb['id'] = df_pred_lgb.index + 1
+
+# +
+df_pred_lgb = df_pred_lgb[['id', 'target']]
+
+df_pred_lgb['target'] = list(map(round, df_pred_lgb['target']))
+df_pred_lgb
+# -
+
+df_pred_lgb.to_csv('submission_lgb.csv', index=False)
+
+lgb.plot_importance(bst)
+
+lgb.plot_metric(record)
+
+# CV
+
+# +
+train_data_lgb_cv = lgb.Dataset(df_train_onehot.values, label=target_train.values)
+
+record={}
+bst_cv = lgb.cv(param, train_data_lgb_cv, n_round, callbacks=[early], return_cvbooster=True)
+bst_cv['cvbooster']
+# -
+
+bst_cv_model = bst_cv['cvbooster']
+lgb_cv_pred_ = bst_cv_model.predict(df_test_onehot.values)
+
+lgb_cv_pred = np.zeros(152)
+for pred in lgb_cv_pred_:
+    lgb_cv_pred += pred
+lgb_cv_pred = lgb_cv_pred/5
+lgb_cv_pred
+
+df_pred_lgb_cv = pd.DataFrame(data=lgb_cv_pred, columns=['target'])
+df_pred_lgb_cv['id'] = df_pred_lgb_cv.index + 1
+
+# +
+df_pred_lgb_cv = df_pred_lgb_cv[['id', 'target']]
+
+df_pred_lgb_cv['target'] = list(map(round, df_pred_lgb_cv['target']))
+df_pred_lgb_cv
+# -
+
+df_pred_lgb_cv.to_csv('submission_lgb_cv.csv', index=False)
+
+# ## grid search
+
+X_train = df_train_onehot.values
+y_train = target_train.values
+
+lgbm = lgb.LGBMClassifier()
+lgbm.fit(X_train[:train_n], y_train[:train_n])
+lgbm.score(X_train[:train_n], y_train[:train_n])
+
+from sklearn.metrics import classification_report
+X_test = df_test_onehot.values
+pred_test = lgbm.predict(X_train[train_n:])
+pred_test_ = list(map(round, np.squeeze(pred_test)))
+print(classification_report(y_train[train_n:], pred_test_))
+
+# +
+from sklearn.model_selection import GridSearchCV
+
+grid_params ={'boosting_type': ['gbdt', 'dart', 'goss', 'rf'], 'max_depth' : range(1, 20, 2) , 'n_estimators': range(50, 150, 10), 'learning_rate':[0.01, 0.1], 'random_state':[24]}
+grid_search = GridSearchCV(lgb.LGBMClassifier(), grid_params, cv=5)
+grid_search.fit(X_train, y_train)
+# -
+
+print('Best_params: {}'.format(grid_search.best_params_))
+print('Best_score: {:.4f}'.format(grid_search.best_score_))
+
+# +
+train_data_lgb_cv = lgb.Dataset(df_train_onehot.values, label=target_train.values)
+param = {'boosting': 'dart', 'learning_rate': 0.1, 'max_depth': 5, 'num_iterations': 50, 'seed': 24, 'device_type': 'gpu'}
+n_round = 100
+
+dart_cv = lgb.cv(param, train_data_lgb_cv, n_round, return_cvbooster=True)
+
+# +
+dart_cv_model = dart_cv['cvbooster']
+dart_cv_pred_ = dart_cv_model.predict(df_test_onehot.values)
+
+dart_cv_pred = np.zeros(152)
+for pred in dart_cv_pred_:
+    dart_cv_pred += pred
+dart_cv_pred = dart_cv_pred/5
+
+# +
+df_pred_dart_cv = pd.DataFrame(data=dart_cv_pred, columns=['target'])
+df_pred_dart_cv['id'] = df_pred_dart_cv.index + 1
+
+df_pred_dart_cv = df_pred_dart_cv[['id', 'target']]
+
+df_pred_dart_cv['target'] = list(map(round, df_pred_dart_cv['target']))
+df_pred_dart_cv
+# -
+
+df_pred_dart_cv.to_csv('submission_dart_cv.csv', index=False)
+
+

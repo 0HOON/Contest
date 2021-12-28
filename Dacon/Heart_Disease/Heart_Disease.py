@@ -14,6 +14,12 @@
 #     name: python3
 # ---
 
+# 심장 질환 예측 경진대회
+# ==========
+# https://dacon.io/competitions/official/235848/overview/description
+#
+# 참여해본 두 번째 경진대회. 이번엔 유명한 데이터인 심장 질환 관련 수치들을 가지고 심장 질환 여부를 예측하는 Binary Classification 모델을 구성하는 것이 목적이었다. 다루는 데이터가 수치로 주어져 있어 데이터 분석 및 처리가 수월할 것으로 예상한다.
+
 # +
 import tensorflow as tf
 import tensorflow.keras as keras
@@ -30,6 +36,8 @@ df_train = pd.read_csv('./train.csv', index_col='id')
 df_train.head()
 
 df_train.describe()
+
+# 필요한 패키지 임포트 및 데이터 불러오기. data frame으로 데이터의 대략적인 모양새를 살펴본다.
 
 # **cp**: 가슴 통증(chest pain) 종류 
 # 0 : asymptomatic 무증상
@@ -48,7 +56,7 @@ df_train.describe()
 # 2: upsloping 상승
 #
 # **ca**: number of major vessels colored by flouroscopy 형광 투시로 확인된 주요 혈관 수 (0~3 개) 
-# Null 값은 숫자 4로 인코딩됨 -> 4는 없음
+# Null 값은 숫자 4로 인코딩됨 -> 4는 training data에는 없고, test data에서 한 건 발견된다.
 #
 # **thal**: thalassemia 지중해빈혈 여부
 # 0 = Null 
@@ -56,14 +64,13 @@ df_train.describe()
 # 2 = fixed defect 고정 결함
 # 3 = reversable defect 가역 결함
 #
+# - *위 feature들은 수치가 아니라 class를 나타내므로 one hot encoding을 해주는 것이 좋을 것이다.*
 
 cp_df = pd.get_dummies(df_train.cp, prefix='cp')
 restecg_df = pd.get_dummies(df_train.restecg, prefix='restecg')
 slope_df = pd.get_dummies(df_train.slope, prefix='slope')
 ca_df = pd.get_dummies(df_train.ca, prefix='ca')
 thal_df = pd.get_dummies(df_train.thal, prefix='thal')
-
-# 위 특성들은 주의할 것들. one hot encoding해주자.
 
 cp_df = cp_df.drop('cp_0', axis=1)
 restecg_df = restecg_df.drop('restecg_1', axis=1)
@@ -74,11 +81,13 @@ df_train_onehot = df_train.drop(['cp', 'restecg', 'slope', 'ca', 'thal'], axis=1
 df_train_onehot = pd.concat([df_train_onehot, cp_df, restecg_df, slope_df, ca_df, thal_df], axis=1)
 df_train_onehot.head()
 
-# - age: 나이
-# - trestbps: (resting blood pressure) 휴식 중 혈압(mmHg)
-# - chol: (serum cholestoral) 혈중 콜레스테롤 (mg/dl)
-# - thalach: (maximum heart rate achieved) 최대 심박수
-# - oldpeak: (ST depression induced by exercise relative to rest) 휴식 대비 운동으로 인한 ST 하강
+# **age**: 나이
+# **trestbps**: (resting blood pressure) 휴식 중 혈압(mmHg)
+# **chol**: (serum cholestoral) 혈중 콜레스테롤 (mg/dl)
+# **thalach**: (maximum heart rate achieved) 최대 심박수
+# **oldpeak**: (ST depression induced by exercise relative to rest) 휴식 대비 운동으로 인한 ST 하강
+#
+# - 위 feature들은 연속적인 수치를 나타낸다. 이런 수치들은 0~1 사이의 값으로 rescaling 해주는 것이 바람직할 것이다.
 
 continuous_f = ['age', 'trestbps', 'chol', 'thalach', 'oldpeak']
 max_val = []
@@ -99,8 +108,6 @@ dataset = tf.data.Dataset.from_tensor_slices((df_train_onehot.values, target_tra
 
 train_n = int(df_train_onehot.count()[0]*0.7)
 train_n
-
-
 
 ds_train = dataset.take(train_n)
 ds_val = dataset.skip(train_n)
@@ -126,6 +133,8 @@ ds_val = (
 # -
 
 ds_train.element_spec
+
+# 전처리한 data frame을 dataset으로 준비한다. 
 
 # +
 from tensorflow.keras import layers
@@ -153,6 +162,8 @@ model = keras.Sequential([
 ])
 # -
 
+# 처음으로 시도해볼 모델은 6층으로 쌓은 dense 모델이다. 많지 않은 feature와 dataset에는  이런 단순한 모델이 효과적이지 않을까?
+
 model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['binary_accuracy'])
 
 # +
@@ -170,6 +181,8 @@ history_df = pd.DataFrame(history.history)
 history_df.loc[:, ['loss', 'val_loss']].plot()
 history_df.loc[:, ['binary_accuracy', 'val_binary_accuracy']].plot()
 print("Highest validation accuracy: {}".format(history_df.val_binary_accuracy.max()))
+
+# validationa accuracy가 67%정도로 만족스럽지 못한 결과이다. 그래도 우선 이 모델로 submission을 생성해보자.
 
 df_test = pd.read_csv('./test.csv', index_col='id')
 df_test.head()
@@ -208,6 +221,10 @@ df_pred
 # -
 
 df_pred.to_csv('submission.csv', index=False)
+
+# ## Light GBM
+#
+# 두 번째로 시도해볼 모델은 light gbm모델이다. light gbm은 ensemble 모델 중 gradiant boosting method 계열의 각광받는 모델이다. 다른 boosting method 계열의 모델보다 계산량은 적고, 성능은 비슷하거나 앞서는, 좋은 모습을 보여주고 있는 모델이라고 한다.
 
 # +
 import lightgbm as lgb
@@ -278,6 +295,8 @@ df_pred_lgb_cv
 df_pred_lgb_cv.to_csv('submission_lgb_cv.csv', index=False)
 
 # ## grid search
+#
+# light gbm에는 정말 많은 parameter 값이 있다. 그 중 일부라도 grid search로 최적의 parameter를 찾아보자.
 
 X_train = df_train_onehot.values
 y_train = target_train.values
@@ -302,6 +321,8 @@ grid_search.fit(X_train, y_train)
 
 print('Best_params: {}'.format(grid_search.best_params_))
 print('Best_score: {:.4f}'.format(grid_search.best_score_))
+
+# grid search로 찾은 최적의 parameter들. 이것들을 적용해 새로 학습시켜보자.
 
 # +
 train_data_lgb_cv = lgb.Dataset(df_train_onehot.values, label=target_train.values)
@@ -331,4 +352,4 @@ df_pred_dart_cv
 
 df_pred_dart_cv.to_csv('submission_dart_cv.csv', index=False)
 
-
+# 최종 f1 score는 0.7826. 데이터와 모델에 대한 충분한 이해가 없이 주먹구구식으로 접근했던 것 같아 아쉬움이 남는다. 다음에는 좀 더 여유를 두고 참여하여 충분한 이해를 바탕으로 만들어보자.

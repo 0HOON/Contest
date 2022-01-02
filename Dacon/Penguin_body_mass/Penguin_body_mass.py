@@ -104,9 +104,6 @@ for col in df_train_onehot.columns:
 
 df_train_onehot.head()
 
-df_train_y_rescaled = df_train_y / df_train_y.max()
-df_train_y_rescaled.head()
-
 # 데이터 준비 완료. 데이터셋이 적으므로 KFold Cross validation method로 학습시켜보자.
 
 train_n = int(df_train_onehot.count()[0]*0.8)
@@ -573,7 +570,101 @@ for col in cols:
 df_train_target.head()
 # -
 
-# ### test set
+df_train_y = df_train_target.pop("Body Mass (g)")
+df_train_target.head()
+
+# +
+df_train.reset_index(drop=True, inplace=True)
+df_train.index.name = "id"
+
+df_train_target.reset_index(drop=True, inplace=True)
+df_train_target.index.name = "id"
+
+df_train_y.reset_index(drop=True, inplace=True)
+df_train_y.index.name = "id"
+
+df_train_target
+# -
+
+col_max = df_train_y.max()
+col_min = df_train_y.min()
+df_train_y_rescaled = (df_train_y - col_min) / (col_max - col_min)
+
+# ### test set 결측치 채우기 위한 모델 학습
+
+df_test.isna().sum()
+
+# Sex의 결측치를 채우는 모델을 만들자
+
+# +
+df_train_fill = df_train_target.copy()
+
+df_train_fill.loc[(df_train_fill["Sex"] > 0.5), "Sex"] = 1
+df_train_fill.loc[(df_train_fill["Sex"] < 0.5), "Sex"] = 0
+
+df_train_fill_y = df_train_fill.pop("Sex")
+df_train_fill.head()
+
+# +
+ds_ = tf.data.Dataset.from_tensor_slices((df_train_fill.values.astype(float), df_train_fill_y.values.astype(float))).shuffle(buffer_size=500)
+ds_train = ds_.take(train_n)
+ds_val = ds_.skip(train_n)
+
+AUTOTUNE = tf.data.experimental.AUTOTUNE
+
+ds_train = ds_train = (
+    ds_train
+    .batch(32)
+    .cache()
+    .prefetch(buffer_size=AUTOTUNE)
+)
+
+ds_val = (
+    ds_val
+    .batch(32)
+    .cache()
+    .prefetch(buffer_size=AUTOTUNE)
+)
+# -
+
+ds_train.element_spec
+
+# +
+model_fill = keras.Sequential([
+    layers.Dense(512, input_shape=[4], kernel_initializer=keras.initializers.he_normal()),
+    layers.PReLU(),
+    layers.BatchNormalization(),
+    layers.Dropout(0.5),
+    
+    layers.Dense(64, kernel_initializer=keras.initializers.he_normal()),
+    layers.PReLU(),
+    layers.BatchNormalization(),
+    layers.Dropout(0.5),
+    
+    
+    layers.Dense(1, kernel_initializer=keras.initializers.he_normal(), activation='sigmoid')
+    
+])
+# -
+
+model_fill.compile(optimizer=keras.optimizers.Adam(learning_rate=0.0005), loss='binary_crossentropy', metrics=['binary_accuracy'])
+
+# +
+early = keras.callbacks.EarlyStopping(patience=100, min_delta=0.001, restore_best_weights=True)
+
+history_fill = model_fill.fit(
+    ds_train,
+    validation_data=ds_val,
+    callbacks=[early],
+    epochs=2000
+)
+# -
+
+history_df = pd.DataFrame(history_fill.history)
+history_df.loc[:, ['binary_accuracy', 'val_binary_accuracy']].plot()
+print("Highest validation accuracy: {}".format(history_df.val_binary_accuracy.max()))
+
+# 모델 준비 완료. 테스트셋 결측치를 채워보자
 
 # +
 idx_A = df_test[df_test["Species"] == "Adelie Penguin (Pygoscelis adeliae)"].index
@@ -606,6 +697,23 @@ for col in cols:
 df_test_target.head()
 
 # +
+df_test_fill = df_test_target.drop("Sex", axis=1)
+idx_to_fill = df_test_target[df_test_target.Sex.isna()].index
+
+pred_fill = np.squeeze(model_fill.predict(df_test_fill.loc[idx_to_fill].values.astype(float)))
+pred_fill = list(map(round, pred_fill))
+
+for i, idx in enumerate(idx_to_fill):
+    df_test_target.loc[idx, "Sex"] = pred_fill[i]
+# -
+
+df_test_target.isna().sum()
+
+# 결측치 채운 데이터로 학습 및 예측해보기
+
+# +
+import lightgbm as lgb
+
 train_data_lgb = lgb.Dataset(df_train_target[:train_n].values, label=df_train_y[:train_n].values)
 val_data_lgb = train_data_lgb.create_valid(df_train_target[train_n:].values, label=df_train_y[train_n:].values)
 
@@ -682,19 +790,18 @@ model_Dense = keras.Sequential([
 model_Dense.compile(optimizer=keras.optimizers.Adam(learning_rate=0.0005), loss="mse")
 
 # +
-early = keras.callbacks.EarlyStopping(patience=100, min_delta=0.001, restore_best_weights=True)
+early = keras.callbacks.EarlyStopping(patience=100, min_delta=0.0001, restore_best_weights=True)
 
 history_Dense = model_Dense.fit(
-    ds_train,
-    
+    ds_train,  
     validation_data=ds_val,
-#    callbacks=[early],
+    callbacks=[early],
     epochs=2000
 )
 # -
 
 history_df = pd.DataFrame(history_Dense.history)
-history_df.loc[1000:, ['loss', 'val_loss']].plot()
+history_df.loc[:, ['loss', 'val_loss']].plot()
 print("Lowest validation mse: {}".format(history_df.val_loss.min()))
 
 test_sample = df_train_target.sample(40, random_state=10)
@@ -709,7 +816,7 @@ def get_mse(pred, y):
 # +
 pred_d = np.squeeze(model_Dense.predict(test_sample.values.astype(float)))
 pred_g = np.squeeze(bst_target.predict(test_sample.values.astype(float))) 
-pred_d = (pred_d * (col_max - col_min)) + col_min
+pred_d = (pred_d * (df_train_y.max() - df_train_y.min())) + df_train_y.min()
 
 pred_mix = (pred_d + pred_g)/2
 
@@ -724,19 +831,31 @@ from itertools import combinations
 cols = ["Culmen Length (mm)", "Culmen Depth (mm)", "Flipper Length (mm)"]
 
 for i, col in enumerate(combinations(cols, 2)):
-    df_train_target["m_{}".format(i)] = df_train_target[col[0]] * df_train_target[col[1]]
-    df_train_target["d_{}".format(i)] = df_train_target[col[0]] / df_train_target[col[1]]
-    df_test_target["m_{}".format(i)] = df_test_target[col[0]] * df_train_target[col[1]]
-    df_test_target["d_{}".format(i)] = df_test_target[col[0]] / df_test_target[col[1]]
+    df_train_target["m_{}".format(i)] = df_train[col[0]] * df_train[col[1]]
+    df_train_target["d_{}".format(i)] = df_train[col[0]] / df_train[col[1]]
+    df_test_target["m_{}".format(i)] = df_test[col[0]] * df_test[col[1]]
+    df_test_target["d_{}".format(i)] = df_test[col[0]] / df_test[col[1]]
+    
+    min_max_scale(df_train_target, "m_{}".format(i))
+    min_max_scale(df_train_target, "d_{}".format(i))
+    min_max_scale(df_test_target, "m_{}".format(i))
+    min_max_scale(df_test_target, "d_{}".format(i))
+
+
+# -
+
+df_test_target.isna().sum()
+
+df_train_target.to_csv('df_train_target.csv')
 
 # +
-ds_ = tf.data.Dataset.from_tensor_slices((df_train_target.values.astype(float), df_train_y_rescaled.values)).shuffle(buffer_size=500)
+ds_ = tf.data.Dataset.from_tensor_slices((df_train_target.values.astype(float), df_train_y_rescaled.values.astype(float))).shuffle(buffer_size=500)
 ds_train = ds_.take(train_n)
 ds_val = ds_.skip(train_n)
 
 AUTOTUNE = tf.data.experimental.AUTOTUNE
 
-ds_train = ds_train = (
+ds_train = (
     ds_train
     .batch(32)
     .cache()
@@ -754,38 +873,36 @@ ds_val = (
 ds_train.element_spec
 
 # +
-model_Dense = keras.Sequential([
+model_Dense_mf = keras.Sequential([
     layers.Dense(512, input_shape=[11], kernel_initializer=keras.initializers.he_normal()),
     layers.PReLU(),
     layers.BatchNormalization(),
-    layers.Dropout(0.5),
+    layers.Dropout(0.75),
     
     layers.Dense(64, kernel_initializer=keras.initializers.he_normal()),
     layers.PReLU(),
     layers.BatchNormalization(),
     layers.Dropout(0.5),
     
-    
     layers.Dense(1, kernel_initializer=keras.initializers.he_normal(), activation='relu')
     
 ])
 # -
 
-model_Dense.compile(optimizer=keras.optimizers.Adam(learning_rate=0.0005), loss="mse")
+model_Dense_mf.compile(optimizer=keras.optimizers.Adam(learning_rate=0.0005), loss="mse")
 
 # +
 early = keras.callbacks.EarlyStopping(patience=100, min_delta=0.001, restore_best_weights=True)
 
-history_Dense = model_Dense.fit(
+history_Dense_mf = model_Dense_mf.fit(
     ds_train,
-    
     validation_data=ds_val,
     callbacks=[early],
     epochs=2000
 )
 # -
 
-history_df = pd.DataFrame(history_Dense.history)
+history_df = pd.DataFrame(history_Dense_mf.history)
 history_df.loc[:, ['loss', 'val_loss']].plot()
 print("Lowest validation mse: {}".format(history_df.val_loss.min()))
 
@@ -813,12 +930,16 @@ lgb.plot_metric(record)
 test_sample = df_train_target.sample(40, random_state=10)
 test_sample_y = df_train_y.sample(40, random_state=10)
 
-# +
-pred_d = np.squeeze(model_Dense.predict(test_sample.values.astype(float)))
-pred_g = np.squeeze(bst_target.predict(test_sample.values.astype(float))) 
-pred_d = (pred_d * (col_max - col_min)) + col_min
 
-pred_mix = (pred_d + pred_g)/2
+
+# +
+pred_d = np.squeeze(model_Dense_mf.predict(test_sample.values.astype(float)))
+pred_g = np.squeeze(bst_target.predict(test_sample.values.astype(float))) 
+pred_d = (pred_d * (df_train["Body Mass (g)"].max() - df_train["Body Mass (g)"].min())) + df_train["Body Mass (g)"].min()
+
+mse_d = get_mse(pred_d, test_sample_y.values)
+mse_g = get_mse(pred_g, test_sample_y.values)
+pred_mix = pred_d * (mse_d / (mse_d + mse_g)) + pred_g * (mse_g / (mse_d + mse_g))
 
 print("rmse for dense: {}\nrmse for bst: {}\n mix: {}".format(get_mse(pred_d, test_sample_y.values), get_mse(pred_g, test_sample_y.values), get_mse(pred_mix, test_sample_y.values)))
 # -
@@ -826,11 +947,11 @@ print("rmse for dense: {}\nrmse for bst: {}\n mix: {}".format(get_mse(pred_d, te
 df_test_target.isna().sum()
 
 # +
-pred_d = np.squeeze(model_Dense.predict(df_test_target.values.astype(float)))
-pred_d = (pred_d * (col_max - col_min)) + col_min
+pred_d = np.squeeze(model_Dense_mf.predict(df_test_target.values.astype(float)))
+pred_d = (pred_d * (df_train["Body Mass (g)"].max() - df_train["Body Mass (g)"].min())) + df_train["Body Mass (g)"].min()
 pred_g = np.squeeze(bst_target.predict(df_test_target.values.astype(float))) 
 
-pred_mix = (pred_d + pred_g)/2
+pred_mix = pred_d * (mse_d / (mse_d + mse_g)) + pred_g * (mse_g / (mse_d + mse_g))
 # -
 
 df_pred = pd.DataFrame(pred_mix, columns=["Body Mass (g)"])
@@ -838,3 +959,154 @@ df_pred.index.name = "id"
 df_pred
 
 df_pred.to_csv('submisssion_interfeature.csv')
+
+
+# CV로 성능 향상
+
+def Dense_model():
+    
+    model = keras.Sequential([
+        layers.Dense(512, input_shape=[5], kernel_initializer=keras.initializers.he_normal()),
+        layers.PReLU(),
+        layers.BatchNormalization(),
+        layers.Dropout(0.75),
+
+        layers.Dense(64, kernel_initializer=keras.initializers.he_normal()),
+        layers.PReLU(),
+        layers.BatchNormalization(),
+        layers.Dropout(0.5),
+
+        layers.Dense(1, kernel_initializer=keras.initializers.he_normal(), activation='relu')
+
+    ])
+    
+    model.compile(optimizer=keras.optimizers.Adam(learning_rate=0.0005), loss="mse")
+    
+    return model
+
+
+def mk_Dataset(X, y):
+    ds_ = tf.data.Dataset.from_tensor_slices((X.values.astype(float), y.values.astype(float)))
+
+    AUTOTUNE = tf.data.experimental.AUTOTUNE
+
+    ds = (
+        ds_
+        .batch(32)
+        .cache()
+        .prefetch(buffer_size=AUTOTUNE)
+    )
+    
+    return ds
+
+
+col_max = df_train["Body Mass (g)"].max()
+col_min = df_train["Body Mass (g)"].min()
+
+# +
+from sklearn.model_selection import StratifiedKFold
+
+NFOLDS = 5
+
+kfold = StratifiedKFold(n_splits=NFOLDS, shuffle=True, random_state = 102)
+
+num_seeds = 5
+cv_train = np.zeros(len(df_train_target))
+cv_pred = np.zeros(len(df_test_target))
+
+early = keras.callbacks.EarlyStopping(patience=100, restore_best_weights=True)
+
+for s in range(num_seeds):
+    
+    np.random.seed(s)
+
+    for (tr_idx, te_idx) in kfold.split(df_train_target, df_train_y):
+        ds_train = mk_Dataset(df_train_target.loc[tr_idx, :], df_train_y_rescaled.loc[tr_idx])
+        ds_test = mk_Dataset(df_train_target.loc[te_idx, :], df_train_y_rescaled.loc[te_idx])
+        
+        model = Dense_model()
+        
+        model.fit(
+            ds_train,
+            validation_data=ds_test,
+            verbose=0,
+#            callbacks=[early],
+            epochs=2000
+        )
+        
+        model.fit(
+            ds_train,
+            validation_data=ds_test,
+            verbose=0,
+            callbacks=[early],
+            epochs=2000
+        )
+        
+        cv_train[te_idx] += np.squeeze(model.predict(df_train_target.loc[te_idx, :].values.astype(float)))
+        print("mse: {}".format(get_mse(( cv_train[te_idx] * (col_max - col_min) / (s + 1)) + col_min, df_train_y[te_idx]) ))
+
+        cv_pred += np.squeeze(model.predict(df_test_target.values.astype(float)))
+
+    print("-----------------")
+    print("seed{}_mse: {}".format(s, get_mse( ( (cv_train / (s + 1)) * (col_max - col_min) ) + col_min, df_train_y)))
+    print("-----------------")
+# -
+
+cv_pred = cv_pred / (NFOLDS * num_seeds)
+cv_pred = ( cv_pred * (col_max - col_min) ) + col_min
+df_cv_pred = pd.DataFrame(cv_pred, columns=["Body Mass (g)"])
+df_cv_pred.index.name = "id"
+df_cv_pred
+
+import lightgbm as lgb
+
+# +
+
+NFOLDS = 5
+
+kfold = StratifiedKFold(n_splits=NFOLDS, shuffle=True, random_state = 102)
+
+param = {'boosting_type': 'gbdt', 'learning_rate': 0.1, 'max_depth': 1, 'n_estimators': 140, 'random_state': 30,
+         'objective': 'mse', 'device_type': 'gpu'}
+
+num_seeds = 16
+n_round = 10000
+
+cv_train_lgb = np.zeros(len(df_train_target))
+cv_pred_lgb = np.zeros(len(df_test_target))
+
+early = lgb.early_stopping(100)
+
+for s in range(num_seeds):
+    
+    param['random_state'] = s
+
+    for (tr_idx, te_idx) in kfold.split(df_train_target, df_train_y):
+        
+        train_data_lgb = lgb.Dataset(df_train_target.loc[tr_idx, :].values, label=df_train_y[tr_idx].values)
+        val_data_lgb = train_data_lgb.create_valid(df_train_target.loc[te_idx, :].values, label=df_train_y[te_idx].values)
+        
+        bst = lgb.train(param, train_data_lgb, n_round, valid_sets=[val_data_lgb], callbacks=[early])
+        print('best score: {}'.format(bst.best_score))
+
+        cv_train_lgb[te_idx] += np.squeeze(bst.predict(df_train_target.loc[te_idx, :].values.astype(float)))
+        print("mse: {}".format(get_mse( cv_train_lgb[te_idx] / (s + 1) , df_train_y[te_idx]) ))
+
+        cv_pred_lgb += np.squeeze(bst.predict(df_test_target.values.astype(float)))
+
+    print("-----------------")
+    print("seed{}_mse: {}".format(s, get_mse( cv_train_lgb / (s + 1), df_train_y)))
+    print("-----------------")
+# -
+
+cv_pred_lgb = cv_pred_lgb / (NFOLDS * num_seeds)
+df_cv_pred_lgb = pd.DataFrame(cv_pred_lgb, columns=["Body Mass (g)"])
+df_cv_pred_lgb.index.name = "id"
+df_cv_pred_lgb
+
+cv_pred_mix = cv_pred * 0.5 + cv_pred_lgb * 0.5
+df_cv_mix = pd.DataFrame(cv_pred_mix, columns=["Body Mass (g)"])
+df_cv_mix.index.name = "id"
+df_cv_mix
+
+df_cv_mix.to_csv("submission_cv_mix_lf.csv")

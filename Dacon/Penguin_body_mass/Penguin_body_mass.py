@@ -94,9 +94,20 @@ species_df = pd.get_dummies(df_train["Species"])
 Island_df = pd.get_dummies(df_train["Sex"])
 Island_df = Island_df.drop("MALE", axis=1)
 
+# +
 df_train_onehot = df_train_fixed.drop(["Species", "Sex"], axis=1)
 df_train_onehot = pd.concat([df_train_onehot, species_df, Island_df], axis=1)
+
+col_cnt = ["Culmen Length (mm)", "Culmen Depth (mm)", "Flipper Length (mm)"]
+
+for col in col_cnt:
+    if (col in df_train.columns):
+        col_max = df_train[col].max()
+        col_min = df_train[col].min()
+        df_train_onehot[col] = (df_train_onehot[col] - col_min) / (col_max - col_min)
+        
 df_train_onehot.head()
+# -
 
 df_train_y = df_train_onehot.pop("Body Mass (g)")
 for col in df_train_onehot.columns:
@@ -108,6 +119,24 @@ df_train_onehot.head()
 
 train_n = int(df_train_onehot.count()[0]*0.8)
 train_n
+
+# +
+df_test = pd.read_csv("./test.csv", index_col="id")
+
+species_df = pd.get_dummies(df_test["Species"])
+Island_df = pd.get_dummies(df_test["Sex"])
+Island_df = Island_df.drop("MALE", axis=1)
+
+df_test_onehot = df_test.drop(["Species", "Sex", "Delta 15 N (o/oo)", "Delta 13 C (o/oo)", "Clutch Completion", "Island"], axis=1)
+df_test_onehot = pd.concat([df_test_onehot, species_df, Island_df], axis=1)
+
+for col in df_test_onehot.columns:
+    if (col in df_train.columns):
+        col_max = df_train[col].max()
+        col_min = df_train[col].min()
+        df_test_onehot[col] = (df_test_onehot[col] - col_min) / (col_max - col_min)
+
+df_test_onehot.head()
 
 # +
 ds_ = tf.data.Dataset.from_tensor_slices((df_train_onehot.values, df_train_y.values)).shuffle(buffer_size=500)
@@ -177,23 +206,6 @@ history_Dense = model_Dense.fit(
 history_df = pd.DataFrame(history_Dense.history)
 history_df.loc[:, ['loss', 'val_loss']].plot()
 print("Lowest validation mse: {}".format(history_df.val_loss.min()))
-
-# +
-df_test = pd.read_csv("./test.csv", index_col="id")
-
-species_df = pd.get_dummies(df_test["Species"])
-Island_df = pd.get_dummies(df_test["Sex"])
-Island_df = Island_df.drop("MALE", axis=1)
-
-df_test_onehot = df_test.drop(["Species", "Sex", "Delta 15 N (o/oo)", "Delta 13 C (o/oo)", "Clutch Completion", "Island"], axis=1)
-df_test_onehot = pd.concat([df_test_onehot, species_df, Island_df], axis=1)
-
-for col in df_test_onehot.columns:
-    if (col in df_train.columns):
-        df_test_onehot[col] = df_test_onehot[col] / df_train[col].max()
-
-df_test_onehot.head()
-# -
 
 pred = model_Dense.predict(df_test_onehot)
 pred
@@ -480,9 +492,20 @@ species_df = pd.get_dummies(df_train["Species"])
 Island_df = pd.get_dummies(df_train["Sex"])
 Island_df = Island_df.drop("MALE", axis=1)
 
+# +
 df_train_onehot = df_train.drop(["Species", "Sex", "Delta 15 N (o/oo)", "Delta 13 C (o/oo)", "Clutch Completion", "Island"], axis=1)
 df_train_onehot = pd.concat([df_train_onehot, species_df, Island_df], axis=1)
+
+col_cnt = ["Culmen Length (mm)", "Culmen Depth (mm)", "Flipper Length (mm)"]
+
+for col in col_cnt:
+    if (col in df_train.columns):
+        col_max = df_train[col].max()
+        col_min = df_train[col].min()
+        df_train_onehot[col] = (df_train_onehot[col] - col_min) / (col_max - col_min)
+        
 df_train_onehot.head()
+# -
 
 df_train_y = df_train_onehot.pop("Body Mass (g)")
 for col in df_train_onehot.columns:

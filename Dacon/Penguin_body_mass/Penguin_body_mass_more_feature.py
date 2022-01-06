@@ -143,7 +143,7 @@ df_fill = df_train_target.copy()
 df_fill = df_fill.drop(["Delta 15 N (o/oo)", "Delta 13 C (o/oo)", "Sex"], axis=1)
 
 df_fill_sex = df_fill.drop(["Island", "Clutch Completion"], axis=1)
-df_fill_sex_y = df_train_target["Sex"]
+df_fill_sex_y = df_train_target["Sex"].copy()
 
 for i, u in enumerate(df_fill_sex_y.unique()):
     df_fill_sex_y.loc[(df_fill_sex_y == u)] = i
@@ -373,7 +373,10 @@ print("Lowest validation loss: {}".format(history_df.val_loss.min()))
 # +
 idx_to_fill = df_test[df_test["Delta 13 C (o/oo)"].isna()].index
 
-pred_fill = np.squeeze(model_fill_C.predict(df_fill_test_sex.loc[idx_to_fill].values))
+pred_fill = np.squeeze(model_fill_C.predict(df_fill_test_sex.loc[idx_to_fill].values)) 
+pred_fill
+
+# -
 
 df_test.loc[idx_to_fill, "Delta 13 C (o/oo)"] = pred_fill
 df_test.isna().sum()
@@ -403,6 +406,9 @@ df_test_target.head()
 # -
 
 df_test_target.isna().sum()
+
+df_test.to_csv("test_filled.csv")
+df_train.to_csv("train_droped.csv")
 
 df_train_target.to_csv("train_target.csv")
 df_train_y.to_csv("train_y.csv")
@@ -563,10 +569,8 @@ df_cv_mix
 
 df_cv_mix.to_csv("sub_mix_af.csv")
 
+
 # ## Feature 추가
-
-df_train_target = pd.read_csv("./train_target.csv", index_col="id")
-
 
 def min_max_scale_2(df, col, col_min, col_max):
     df[col] = ( df[col] - col_min) / (col_max - col_min)
@@ -604,7 +608,7 @@ for i, col in enumerate(cnt_cols):
 
 # -
 
-df_test_target
+df_test_target.to_csv("aaaaa.csv")
 
 df_test_target.count(axis=1)
 
@@ -615,14 +619,14 @@ def Dense_model():
         layers.Dense(512, input_shape=[34], kernel_initializer=keras.initializers.he_normal()),
         layers.PReLU(),
         layers.BatchNormalization(),
-        layers.Dropout(0.75),
+        layers.Dropout(0.5),
 
         layers.Dense(128, kernel_initializer=keras.initializers.he_normal()),
         layers.PReLU(),
         layers.BatchNormalization(),
-        layers.Dropout(0.5),
+        layers.Dropout(0.3),
 
-        layers.Dense(1, kernel_initializer=keras.initializers.he_normal())
+        layers.Dense(1, kernel_initializer=keras.initializers.he_normal(), activation='relu')
 
     ])
     
@@ -677,9 +681,142 @@ df_cv_pred = pd.DataFrame(cv_pred, columns=["Body Mass (g)"])
 df_cv_pred.index.name = "id"
 df_cv_pred
 
-df_cv_pred.to_csv("cv_pred_2_dense.csv")
+df_cv_pred.to_csv("cv_pred_dense_relu.csv")
 
 # +
+from sklearn.model_selection import StratifiedKFold
+import lightgbm as lgb
+
+NFOLDS = 5
+
+kfold = StratifiedKFold(n_splits=NFOLDS, shuffle=True, random_state = 102)
+
+param = {'boosting_type': 'gbdt', 'learning_rate': 0.1, 'max_depth': 3, 'n_estimators': 110, 'random_state': 30,
+         'objective': 'mse', 'device_type': 'gpu', 'verbosity' : -1}
+
+num_seeds = 16
+n_round = 10000
+
+cv_train_lgb = np.zeros(len(df_train_target))
+cv_pred_lgb = np.zeros(len(df_test_target))
+
+early = lgb.early_stopping(100)
+
+for s in range(num_seeds):
+    
+    param['random_state'] = s
+
+    for (tr_idx, te_idx) in kfold.split(df_train_target, df_train_y):
+        
+        train_data_lgb = lgb.Dataset(df_train_target.loc[tr_idx, :].values, label=df_train_y.loc[tr_idx].values)
+        val_data_lgb = train_data_lgb.create_valid(df_train_target.loc[te_idx, :].values, label=df_train_y.loc[te_idx].values)
+        
+        bst = lgb.train(param, train_data_lgb, n_round, valid_sets=[val_data_lgb], callbacks=[early])
+        print('best score: {}'.format(bst.best_score))
+
+        cv_train_lgb[te_idx] += np.squeeze(bst.predict(df_train_target.loc[te_idx, :].values.astype(float)))
+        print("mse: {}".format(get_mse( cv_train_lgb[te_idx] / (s + 1) , df_train_y.loc[te_idx]) ))
+
+        cv_pred_lgb += np.squeeze(bst.predict(df_test_target.values.astype(float)))
+
+    print("-----------------")
+    print("seed{}_mse: {}".format(s, get_mse( cv_train_lgb / (s + 1), df_train_y)))
+    print("-----------------")
+# -
+
+cv_pred_lgb = cv_pred_lgb / (NFOLDS * num_seeds)
+df_cv_pred_lgb = pd.DataFrame(cv_pred_lgb, columns=["Body Mass (g)"])
+df_cv_pred_lgb.index.name = "id"
+df_cv_pred_lgb
+
+df_cv_pred_lgb.to_csv('cv_pred_lgb.csv')
+
+cv_pred_mix = cv_pred * 0.5 + cv_pred_lgb * 0.5
+df_cv_mix = pd.DataFrame(cv_pred_mix, columns=["Body Mass (g)"])
+df_cv_mix.index.name = "id"
+df_cv_mix
+
+df_cv_mix.to_csv("sub_cv_mix_interfeature_2.csv")
+
+# ## output rescale and sigmoid
+
+df_train_y_rescaled
+
+
+def Dense_model():
+    
+    model = keras.Sequential([
+        layers.Dense(512, input_shape=[34], kernel_initializer=keras.initializers.he_normal()),
+        layers.PReLU(),
+        layers.BatchNormalization(),
+        layers.Dropout(0.5),
+
+        layers.Dense(128, kernel_initializer=keras.initializers.he_normal()),
+        layers.PReLU(),
+        layers.BatchNormalization(),
+        layers.Dropout(0.3),
+
+        layers.Dense(1, kernel_initializer=keras.initializers.he_normal(), activation='sigmoid')
+
+    ])
+    
+    model.compile(optimizer=keras.optimizers.Adam(learning_rate=0.01), loss="mse")
+    
+    return model
+
+
+# +
+from sklearn.model_selection import StratifiedKFold
+
+NFOLDS = 5
+
+kfold = StratifiedKFold(n_splits=NFOLDS, shuffle=True, random_state = 102)
+
+num_seeds = 5
+cv_train = np.zeros(len(df_train_target))
+cv_pred = np.zeros(len(df_test_target))
+
+early = keras.callbacks.EarlyStopping(patience=100, restore_best_weights=True)
+
+for s in range(num_seeds):
+    
+    np.random.seed(s)
+
+    for (tr_idx, te_idx) in kfold.split(df_train_target, df_train_y):
+        ds_train = mk_Dataset(df_train_target.loc[tr_idx, :], df_train_y_rescaled.loc[tr_idx])
+        ds_test = mk_Dataset(df_train_target.loc[te_idx, :], df_train_y_rescaled.loc[te_idx])
+        
+        model = Dense_model()
+        
+        model.fit(
+            ds_train,
+            validation_data=ds_test,
+            verbose=0,
+            callbacks=[early],
+            epochs=2000
+        )
+        
+        cv_train[te_idx] += np.squeeze(model.predict(df_train_target.loc[te_idx, :].values.astype(float)))
+        print("mse: {}".format(get_mse( ((cv_train[te_idx] / (s + 1)) * (body_max - body_min)) + body_min, df_train_y[te_idx]) ))
+
+        cv_pred += np.squeeze(model.predict(df_test_target.values.astype(float)))
+
+    print("-----------------")
+    print("seed{}_mse: {}".format(s, get_mse( ((cv_train / (s + 1)) * (body_max - body_min)) + body_min, df_train_y)))
+    print("-----------------")
+# -
+
+cv_pred = cv_pred / (NFOLDS * num_seeds)
+cv_pred = ( cv_pred * (body_max - body_min) )+ body_min
+df_cv_pred = pd.DataFrame(cv_pred, columns=["Body Mass (g)"])
+df_cv_pred.index.name = "id"
+df_cv_pred
+
+df_cv_pred.to_csv("cv_pred_dense_sig.csv")
+
+# +
+from sklearn.model_selection import StratifiedKFold
+import lightgbm as lgb
 
 NFOLDS = 5
 
@@ -702,32 +839,33 @@ for s in range(num_seeds):
 
     for (tr_idx, te_idx) in kfold.split(df_train_target, df_train_y):
         
-        train_data_lgb = lgb.Dataset(df_train_target.loc[tr_idx, :].values, label=df_train_y[tr_idx].values)
-        val_data_lgb = train_data_lgb.create_valid(df_train_target.loc[te_idx, :].values, label=df_train_y[te_idx].values)
+        train_data_lgb = lgb.Dataset(df_train_target.loc[tr_idx, :].values, label=df_train_y_rescaled.loc[tr_idx].values)
+        val_data_lgb = train_data_lgb.create_valid(df_train_target.loc[te_idx, :].values, label=df_train_y_rescaled.loc[te_idx].values)
         
         bst = lgb.train(param, train_data_lgb, n_round, valid_sets=[val_data_lgb], callbacks=[early])
         print('best score: {}'.format(bst.best_score))
 
         cv_train_lgb[te_idx] += np.squeeze(bst.predict(df_train_target.loc[te_idx, :].values.astype(float)))
-        print("mse: {}".format(get_mse( cv_train_lgb[te_idx] / (s + 1) , df_train_y[te_idx]) ))
+        print("mse: {}".format(get_mse( ((cv_train_lgb[te_idx] / (s + 1)) * (body_max - body_min)) + body_min, df_train_y.loc[te_idx]) ))
 
         cv_pred_lgb += np.squeeze(bst.predict(df_test_target.values.astype(float)))
 
     print("-----------------")
-    print("seed{}_mse: {}".format(s, get_mse( cv_train_lgb / (s + 1), df_train_y)))
+    print("seed{}_mse: {}".format(s, get_mse( ((cv_train_lgb / (s + 1)) * (body_max - body_min)) + body_min, df_train_y)))
     print("-----------------")
 # -
 
 cv_pred_lgb = cv_pred_lgb / (NFOLDS * num_seeds)
+cv_pred_lgb = ( cv_pred_lgb * (body_max - body_min) )+ body_min
 df_cv_pred_lgb = pd.DataFrame(cv_pred_lgb, columns=["Body Mass (g)"])
 df_cv_pred_lgb.index.name = "id"
 df_cv_pred_lgb
 
-cv_pred_lgb - cv_pred
+df_cv_pred_lgb.to_csv("cv_pred_lgb_sig.csv")
 
-cv_pred_mix = cv_pred * 0.5 + cv_pred_lgb * 0.5
+cv_pred_mix = cv_pred * 0.4 + cv_pred_lgb * 0.3 + np.squeeze(df_cv_pred_relu.values) * 0.3
 df_cv_mix = pd.DataFrame(cv_pred_mix, columns=["Body Mass (g)"])
 df_cv_mix.index.name = "id"
 df_cv_mix
 
-df_cv_mix.to_csv("sub_cv_mix_interfeature_2.csv")
+df_cv_mix.to_csv("sub_cv_mix_interfeature_3.csv")

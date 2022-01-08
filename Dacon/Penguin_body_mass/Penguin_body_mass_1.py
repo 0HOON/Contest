@@ -18,7 +18,9 @@
 # =======
 # https://dacon.io/competitions/official/235862/overview/description
 #
-#
+# 9개의 feature로 펭귄의 몸무게를 예측하는 모델을 만들어 성능을 겨루는 대회이다. 성능은 rmse로 평가한다. 이전에 참가했던 심장 질환 예측 경진대회와 유사한 유형의 자료 및 목표이지만 이번엔 Classification이 아니라 Regression 모델을 만든다.
+
+# ##  데이터 살펴보기
 
 # +
 import tensorflow as tf
@@ -115,8 +117,6 @@ for col in df_train_onehot.columns:
 
 df_train_onehot.head()
 
-# 데이터 준비 완료. 데이터셋이 적으므로 KFold Cross validation method로 학습시켜보자.
-
 train_n = int(df_train_onehot.count()[0]*0.8)
 train_n
 
@@ -137,6 +137,11 @@ for col in df_test_onehot.columns:
         df_test_onehot[col] = (df_test_onehot[col] - col_min) / (col_max - col_min)
 
 df_test_onehot.head()
+# -
+
+# ## Dense model
+
+# 우선 6층짜리 Dense model로 시험해보자
 
 # +
 ds_ = tf.data.Dataset.from_tensor_slices((df_train_onehot.values, df_train_y.values)).shuffle(buffer_size=500)
@@ -162,8 +167,6 @@ ds_val = (
 
 ds_train.element_spec
 
-# ## Dense model
-
 # +
 model_Dense = keras.Sequential([
     layers.Dense(64, input_shape=[7], activation='relu'),
@@ -187,8 +190,6 @@ model_Dense = keras.Sequential([
     
 ])
 # -
-
-# 우선 6층짜리 Dense model로 시험해보자
 
 model_Dense.compile(optimizer=keras.optimizers.Adam(learning_rate=0.0005), loss="mse")
 
@@ -239,7 +240,7 @@ model_Dense_s = keras.Sequential([
 ])
 # -
 
-# 우선 6층짜리 Dense model로 시험해보자
+# 조금 더 단순한 모델로 시험해보자.
 
 model_Dense_s.compile(optimizer=keras.optimizers.Adam(learning_rate=0.001), loss="mse")
 
@@ -259,6 +260,8 @@ history_df.loc[:, ['loss', 'val_loss']].plot()
 print("Lowest validation mse: {}".format(history_df.val_loss.min()))
 
 # ## light GBM
+
+# 저번 경진대회에서 그나마 좋은 성적을 보여주었던 Light GBM 모델을 사용해보자.
 
 # +
 import lightgbm as lgb
@@ -292,106 +295,9 @@ lgb.plot_importance(bst)
 
 lgb.plot_metric(record)
 
-# ## Output rescaling
-
-# +
-import lightgbm as lgb
-
-train_data_lgb_or = lgb.Dataset(df_train_onehot[:train_n].values, label=df_train_y_rescaled[:train_n].values)
-val_data_lgb_or = train_data_lgb.create_valid(df_train_onehot[train_n:].values, label=df_train_y_rescaled[train_n:].values)
-
-# +
-param = {'num_leaves': 31, 'objective': 'mse', 'device_type': 'gpu'}
-n_round = 100
-
-record = {}
-record_eval = lgb.record_evaluation(record)
-early = lgb.early_stopping(100)
-
-bst_or = lgb.train(param, train_data_lgb_or, n_round, valid_sets=[val_data_lgb_or], callbacks=[record_eval, early])
-bst_or.save_model('lgb_model_or.txt', num_iteration=bst.best_iteration)
-print('best score: {}'.format(bst.best_score))
-# -
-
-pred = bst_or.predict(df_test_onehot.values) * df_train_y.max()
-pred
-
-df_pred = pd.DataFrame(data=pred, columns=['Body Mass (g)'])
-df_pred.index.name = "id"
-df_pred.head()
-
-df_pred.to_csv("submission_or.csv")
-
-# +
-ds_ = tf.data.Dataset.from_tensor_slices((df_train_onehot.values, df_train_y_rescaled.values)).shuffle(buffer_size=500)
-ds_train = ds_.take(train_n)
-ds_val = ds_.skip(train_n)
-
-AUTOTUNE = tf.data.experimental.AUTOTUNE
-
-ds_train = ds_train = (
-    ds_train
-    .batch(32)
-    .cache()
-    .prefetch(buffer_size=AUTOTUNE)
-)
-
-ds_val = (
-    ds_val
-    .batch(32)
-    .cache()
-    .prefetch(buffer_size=AUTOTUNE)
-)
-
-# +
-model_Dense = keras.Sequential([
-    layers.Dense(64, input_shape=[7], activation='relu'),
-    
-    layers.BatchNormalization(),
-    layers.Dense(128, activation='relu'),
-    layers.Dropout(0.3),
-    
-    layers.BatchNormalization(),
-    layers.Dense(256, activation='relu'),
-     layers.Dropout(0.3),
-    
-    layers.BatchNormalization(),
-    layers.Dense(256, activation='relu'),
-     layers.Dropout(0.3),
-    
-    layers.BatchNormalization(),
-    layers.Dense(128, activation='relu'),
-    
-    layers.Dense(1, activation='relu')
-    
-])
-# -
-
-model_Dense.compile(optimizer=keras.optimizers.Adam(learning_rate=0.0005), loss="mse")
-
-# +
-early = keras.callbacks.EarlyStopping(patience=100, min_delta=0.001, restore_best_weights=True)
-
-history_Dense = model_Dense.fit(
-    ds_train,
-    validation_data=ds_val,
-    callbacks=[early],
-    epochs=1000
-)
-# -
-
-history_df = pd.DataFrame(history_Dense.history)
-history_df.loc[:, ['loss', 'val_loss']].plot()
-print("Lowest validation mse: {}".format(history_df.val_loss.min()))
-
-pred = model_Dense.predict(df_test_onehot) * df_train_y.max()
-df_pred = pd.DataFrame(data=pred, columns=['Body Mass (g)'])
-df_pred.index.name = "id"
-df_pred.head()
-
-df_pred.to_csv("submission_dense_or.csv")
-
 # ## Grid Search for Light GBM
+
+# Light GBM 모델에 적합한 parameter를 Grid Search로 찾아보자.
 
 X_train = df_train_onehot.values
 y_train = df_train_y.values
@@ -456,6 +362,8 @@ print("rmse for dense: {}\nrmse for grid: {}".format(get_mse(pred_d, test_sample
 
 # ## 결측치 조정
 
+# train, test set에 있는 결측치에 대한 처리를 해주자.
+
 df_train.isna().sum()
 
 df_train[df_train["Sex"].isna()]
@@ -464,7 +372,7 @@ df_train.dropna(subset=["Sex"], inplace=True)
 df_train["Sex"].isna().sum()
 
 
-# Sex column에서 na 제거.
+# Training set에는 빈 칸이 많지 않으니 단순히 빈 칸이 있는 행을 지워주자.
 
 def outlier_idx(df, col, weight=1.5):
     q_25 = np.percentile(df[col], 25)
@@ -486,7 +394,7 @@ for col in cols:
     df_train.drop(outlier_idx_, inplace=True)
 df_train.describe()
 
-# apply **one hot encoding** categorical features and **rescale** continuous values
+# 하는 김에 아웃라이어에 해당하는 행도 지워주자.
 
 species_df = pd.get_dummies(df_train["Species"])
 Island_df = pd.get_dummies(df_train["Sex"])
@@ -510,6 +418,8 @@ df_train_onehot.head()
 df_train_y = df_train_onehot.pop("Body Mass (g)")
 for col in df_train_onehot.columns:
     df_train_onehot[col] = df_train_onehot[col] / df_train_onehot[col].max()
+
+# 새로운 training set으로 학습시켜보자.
 
 # +
 train_data_lgb = lgb.Dataset(df_train_onehot[:train_n].values, label=df_train_y[:train_n].values)
@@ -542,6 +452,8 @@ df_pred.head()
 df_pred.to_csv('submission_bst_no.csv')
 
 # ## one hot 대신 target encoding
+
+# one hot encoding 대신 **target encoding** 방식으로 성능 개선을 이루는 경우가 많다고 한다. target encodig은 categorical feature들의 각 종류마다 새로운 feature를 만드는 대신, 종류별 y의 평균을 새로운 값으로 사용한다.
 
 df_train_onehot.head()
 
@@ -613,7 +525,9 @@ col_max = df_train_y.max()
 col_min = df_train_y.min()
 df_train_y_rescaled = (df_train_y - col_min) / (col_max - col_min)
 
-# ### test set 결측치 채우기 위한 모델 학습
+# ### test set 결측치 채우기
+
+# 앞서 만든 train set을 이용하여 결측치를 예측하는 모델을 만들어보자.
 
 df_test.isna().sum()
 
@@ -848,6 +762,8 @@ print("rmse for dense: {}\nrmse for bst: {}\n mix: {}".format(get_mse(pred_d, te
 
 # ### feature 추가
 
+# 성능을 더 끌어올리기 위해 feature를 추가해보자. 기존에 있던 feature들끼리 곱하고 나누어 새로운 feature들을 생성한다.
+
 # +
 from itertools import combinations
 
@@ -984,7 +900,9 @@ df_pred
 df_pred.to_csv('submisssion_interfeature.csv')
 
 
-# CV로 성능 향상
+# ## CV
+
+# 새로운 feature들로 성능의 향상이 있었는데, K Fold Cross Validation으로 모델을 여러번 학습해 평균을 내어 좀 더 일반적인 성능을 내는 모델을 만들자.
 
 def Dense_model():
     

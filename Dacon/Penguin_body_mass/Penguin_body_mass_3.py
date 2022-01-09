@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # ---
 # jupyter:
 #   jupytext:
@@ -12,6 +13,16 @@
 #     language: python
 #     name: python3
 # ---
+
+# 펭귄 몸무게 예측 경진대회(3)
+# =======
+# https://dacon.io/competitions/official/235862/overview/description
+#
+# 9개의 feature로 펭귄의 몸무게를 예측하는 모델을 만들어 성능을 겨루는 대회이다. 성능은 rmse로 평가한다. 이전에 참가했던 심장 질환 예측 경진대회와 유사한 유형의 자료 및 목표이지만 이번엔 Classification이 아니라 Regression 모델을 만든다.
+
+# ## Categorical feature도 이용하기
+
+# Categorical feature도 다른 feature들과 곱하여 새로운 feature를 더 추가하면 성능을 향상시킬 수 있지 않을까?
 
 # +
 import tensorflow as tf
@@ -104,6 +115,10 @@ for cnt_col in cnt_cols:
 df_train_target["p_Sp"] = df_train_target["Species"] * df_train_target["Species"]
 df_test_target["p_Sp"] = df_test_target["Species"] * df_test_target["Species"]
 
+# ## sklearn의 여러 모델 비교
+#
+# sklearn에서 기본적으로 제공하는 다양한 모델들을 이용하여 앙상블 모델을 만들어본다. 간단하지만 강력한 모델을 만들 수 있었다.
+
 from sklearn.neighbors import KNeighborsRegressor
 from sklearn.linear_model import LinearRegression
 from sklearn.linear_model import Ridge
@@ -173,45 +188,10 @@ df_pred.to_csv("sub_en.csv")
 
 df_train_target
 
-df_test_target.to_csv("aaaaa.csv")
 
-# +
-import lightgbm as lgb
+# ## 다양한 모델 학습
 
-train_data_lgb = lgb.Dataset(df_train_target[:train_n].values, label=df_train_y[:train_n].values)
-val_data_lgb = train_data_lgb.create_valid(df_train_target[train_n:].values, label=df_train_y[train_n:].values)
-
-# +
-param = {'boosting_type': 'gbdt', 'learning_rate': 0.1, 'max_depth': 5, 'n_estimators': 110, 'random_state': 30,
-         'objective': 'mse', 'device_type': 'gpu', 'verbosity' : -1}
-n_round = 100
-
-record = {}
-record_eval = lgb.record_evaluation(record)
-early = lgb.early_stopping(20)
-
-bst = lgb.train(param, train_data_lgb, n_round, valid_sets=[val_data_lgb], callbacks=[record_eval, early])
-bst.save_model('lgb_model.txt', num_iteration=bst.best_iteration)
-print('best score: {}'.format(bst.best_score))
-# -
-
-lgb.plot_importance(bst)
-
-bst.feature_importance()
-
-df_train_target.columns[3]
-
-
-
-df_train_target.columns[bst.feature_importance() > 0]
-
-lgb.plot_metric(record)
-
-df_train_target
-
-
-
-
+# 새로운 dataset으로 기존에 이용했던 모델들 및 Lasso, Ridge regulation을 적용한 모델들도 학습시켜보자.
 
 def get_mse(pred, y):
     rmse = np.sqrt(np.multiply((y-pred), (y-pred))) / len(pred)
@@ -571,11 +551,10 @@ df_cv_mix
 
 df_cv_mix.to_csv("submission_cv_mix_lr.csv")
 
-
-
-
-
-
+# ## mlxtend로 feature selection
+#
+#
+# 많은 feature를 이용한 모델이 가장 처음에 시도했던(feature를 가장 적게 이용했던) 모델과 비슷하거나 떨어지는 퍼포먼스를 보였다. 너무 많은 feature가 오히려 성능을 저하시켰던 것이 아닐까? 가장 적합한 feature를 골라내본다.
 
 # +
 from mlxtend.feature_selection import SequentialFeatureSelector
@@ -599,43 +578,12 @@ fig = plot_sfs(selector.get_metric_dict(), kind='std_err')
 # -
 
 selector.k_feature_names_
+
+# Ridge 모델로 평가한 20개의 중요한 feature들이다. Dense 모델로 직접 해볼 시간이 부족하여 Ridge 모델을 바탕으로 고른 이 feature들에서 최적의 feature들을 골라내보자.
 
 df_train_selected = df_train_target.loc[:, selector.k_feature_names_]
 df_test_selected = df_test_target.loc[:, selector.k_feature_names_]
 df_train_selected
-
-
-
-
-
-
-
-
-
-# +
-from mlxtend.feature_selection import SequentialFeatureSelector
-from mlxtend.plotting import plot_sequential_feature_selection as plot_sfs
-
-X = df_train_target
-y = df_train_y
-
-selector = SequentialFeatureSelector(
-    Ridge(), 
-    scoring='neg_mean_squared_error', 
-    k_features=20, 
-    forward=False, 
-    floating=True,
-    cv=10
-)
-
-selector = selector.fit(X, y)
-fig = plot_sfs(selector.get_metric_dict(), kind='std_err')
-
-# -
-
-selector.k_feature_names_
-
-list(range(7, 15, 2))
 
 loss_list = []
 for i in range(7, 15, 2):
@@ -676,6 +624,8 @@ print(loss_list)
 
 print(loss_list)
 
+# 그리 큰 차이는 아니지만 15개의 feature가 가장 성능이 우수했다. 
+
 important_col = selector.k_feature_names_[:15]
 df_train_selected = df_train_target.loc[:, important_col]
 df_test_selected = df_test_target.loc[:, important_col]
@@ -715,13 +665,12 @@ history_df = pd.DataFrame(sel_hist.history)
 history_df.loc[:, ['loss', 'val_loss']].plot()
 print("Lowest validation loss: {}".format(history_df.val_loss.min()))
 
-get_mse(np.squeeze(sel_model.predict(df_train_selected)), df_train_y)
-
 get_mse(np.squeeze(sel_model.predict(df_train_target)), df_train_y)
 
-df_train_target
 
-
+# ## Final Submission
+#
+# 새로운 feature들로 마지막 모델 및 예측을 생성한다.
 
 def get_mse(pred, y):
     pred = (pred * (body_max - body_min)) + body_min
@@ -1115,3 +1064,6 @@ df_cv_mix.index.name = "id"
 df_cv_mix
 
 df_cv_mix.to_csv("submission_cv_mix_final.csv")
+
+# 최종 순위는 52/289. 
+# Heart Disease 때보다 여유 있는 기간을 가져서 확실히 더 많은 것들을 시도해보고 배울 수 있었다. 또한 그만큼 부족한 부분이 눈에 띄기도 하고 아직 모르는 부분이 많다는 것을 직시하게 된다. 코드를 많이 짜고 수정하다보니 코드를 깔끔하게 짜는 것, 주피터 노트북 작성을 깔끔하게 하는 것이 부족하다는게 느껴진다. 항상 신경써야 할 부분인데, 이것이 미숙하여 작업이 비효율적이었던것 같다. 다음엔 이 부분부터 신경써보자. 갈 길이 멀다.

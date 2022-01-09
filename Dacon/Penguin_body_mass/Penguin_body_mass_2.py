@@ -14,6 +14,17 @@
 #     name: python3
 # ---
 
+# 펭귄 몸무게 예측 경진대회(2)
+# =======
+# https://dacon.io/competitions/official/235862/overview/description
+#
+# 9개의 feature로 펭귄의 몸무게를 예측하는 모델을 만들어 성능을 겨루는 대회이다. 성능은 rmse로 평가한다. 이전에 참가했던 심장 질환 예측 경진대회와 유사한 유형의 자료 및 목표이지만 이번엔 Classification이 아니라 Regression 모델을 만든다.
+
+# ## 모든 feature 이용해보기
+
+# Body Mass와 관련 없어 보였던 Island, Clutch Completion, Delta 15 N, 13 C 등의 feature를 제거했던 것이 성능의 저하를 가져왔던 것은 아닐까? 모든 feature를 이용해보자.
+# train, test 데이터를 불러와 결측치를 제거하고, target encoding 및 min max scaling도 적용해준다.
+
 # +
 import tensorflow as tf
 from tensorflow import keras
@@ -133,6 +144,8 @@ df_test_target.head()
 # -
 
 # ## test set 결측치 채우기
+
+# Sex 뿐만 아니라 다른 결측치도 모두 채워주자.
 
 df_test.isna().sum()
 
@@ -417,6 +430,8 @@ df_test_target.to_csv("test_target.csv")
 
 # ## CV로 모델 훈련
 
+# 이제 데이터 전처리는 완료했다. 이 데이터를 바탕으로 다시 학습시켜보자.
+
 def Dense_model():
     
     model = keras.Sequential([
@@ -572,6 +587,8 @@ df_cv_mix.to_csv("sub_mix_af.csv")
 
 # ## Feature 추가
 
+# 아직 성능이 부족하다. 서로 곱하고 나누고 제곱하여 새로운 feature들을 만들어 넣어 feature를 추가해본다.
+
 def min_max_scale_2(df, col, col_min, col_max):
     df[col] = ( df[col] - col_min) / (col_max - col_min)
 
@@ -607,8 +624,6 @@ for i, col in enumerate(cnt_cols):
     min_max_scale_2(df_test_target, "p_{}".format(i), col_min_p, col_max_p)
 
 # -
-
-df_test_target.to_csv("aaaaa.csv")
 
 df_test_target.count(axis=1)
 
@@ -739,6 +754,8 @@ df_cv_mix
 df_cv_mix.to_csv("sub_cv_mix_interfeature_2.csv")
 
 # ## output rescale and sigmoid
+
+# test set 결측치를 채우는 도중 output을 rescaling하여 classifier처럼 마지막 층의 activation을 sigmoid 함수로 설정하면 성능이 향상되는 것을 보았다. 최종 모델에도 적용해보자.
 
 df_train_y_rescaled
 

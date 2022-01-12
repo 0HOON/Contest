@@ -5,7 +5,7 @@
 
 # datasets #
 #########
-Dacon/Growth_prediction/data
+Dacon/Growth_prediction/data/
 *.csv
-Dacon/Jobcare/Jobcare_data
+Dacon/Jobcare/Jobcare_data/
 *.pdf

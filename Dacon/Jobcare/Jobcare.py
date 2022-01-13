@@ -41,6 +41,28 @@ df_train = pd.read_csv('Jobcare_data/train.csv', index_col='id')
 df_test = pd.read_csv('Jobcare_data/test.csv', index_col='id')
 df_train.head()
 
+# +
+col_cat = ['person_attribute_a',  'person_prefer_c', 
+           'contents_attribute_i', 'contents_attribute_a',
+           'contents_attribute_j_1', 'contents_attribute_j', 'contents_attribute_c', 
+           'contents_attribute_k', 'contents_attribute_m']
+
+col_bin = ['d_l_match_yn', 'd_m_match_yn', 'd_s_match_yn',
+            'h_l_match_yn', 'h_m_match_yn', 'h_s_match_yn']
+
+col_cnt = ['person_attribute_a_1', 'person_attribute_b', 'person_prefer_e', 'contents_attribute_e']
+
+col_code = ['person_prefer_d_1', 'person_prefer_d_2', 'person_prefer_d_3',
+            'person_prefer_h_1', 'person_prefer_h_2', 'person_prefer_h_3',
+            'contents_attribute_l', 'contents_attribute_d', 'contents_attribute_h',
+            'person_rn', 'contents_rn']
+
+col_match = ['person_attribute_a', 'person_prefer_c', 'person_prefer_e']
+
+drop_features = ['person_prefer_f', 'person_prefer_g', 'contents_open_dt']
+
+# -
+
 df_train.describe()
 
 df_train.loc[:,["d_l_match_yn", "d_m_match_yn", "d_s_match_yn", "person_prefer_d_1", "person_prefer_d_2", "person_prefer_d_3", "contents_attribute_d"]]
@@ -236,3 +258,240 @@ df_cv.index.name = 'id'
 y
 
 df_cv.to_csv('sub_0.csv')
+
+# ## 2-2 One hot encoding & match / diff
+
+# f1
+# - onehot 0.644~
+# - match_code 0.6425
+# - count_cat 0.6276
+# - match_code + count_cat 0.6315
+# - match_code + count_cat/cnt 0.6449
+# - match_code + count_cnt 0.6445
+# - match_code + count_cat/cnt/code 0.6527
+# - match_code + count_cat/cnt/code + match_sum 0.6535
+
+code_d = pd.read_csv('Jobcare_data/속성_D_코드.csv', index_col='속성 D 코드')
+code_h = pd.read_csv('Jobcare_data/속성_H_코드.csv', index_col='속성 H 코드')
+code_d.head()
+
+
+# return d_l/m/s_match_yn dataframes
+def is_match(col_p, col_c, df, code):
+    df_m = code.loc[df[col_p], :].reset_index() == code.loc[df[col_c], :].reset_index()
+    for n in df_m.columns:
+        df_m = df_m.rename({n: n + col_p[-1]}, axis=1)
+    return df_m
+
+
+def get_freq(col):
+    return col.value_counts()
+
+
+df_train.contents_attribute_e.value_counts()
+
+# +
+# onehot_cat
+count = 0
+for col in col_cat:
+    if count == 0 :
+        onehot_cols = pd.get_dummies(df_train[col], prefix=col)
+        count += 1
+    else:
+        onehot_cols = pd.concat([onehot_cols, pd.get_dummies(df_train[col], prefix=col)], axis=1)
+
+# match_cols
+count = 0
+for col in col_match:
+    df = pd.DataFrame(df_train[col] == df_train['contents_attribute_{}'.format(col[-1])], columns=['match_{}'.format(col[-1])])
+    if count == 0 :
+        match_cols = df
+        count += 1
+    else:
+        match_cols = pd.concat([match_cols, df], axis=1)
+        
+# diff_e
+diff_e = pd.DataFrame(abs(df_train['contents_attribute_e'] - df_train['person_prefer_e']), columns=['diff_e'])
+
+col_d = [x for x in col_code if 'd' in x and 'person' in x]
+col_h = [x for x in col_code if 'h' in x and 'person' in x]
+
+# match_code
+match_code = []
+for col in col_d:
+    match_code.append(is_match(col, 'contents_attribute_d', df_train, code_d))
+    
+for col in col_h:
+    match_code.append(is_match(col, 'contents_attribute_h', df_train, code_h))
+
+df_match_code = pd.concat(match_code, axis=1)
+
+df_match_code['match_sum'] = df_match_code.sum(axis=1) # match_ sum
+
+# count_cols
+count_cols = pd.DataFrame()
+for col in col_cnt + col_cat + col_code: 
+    u = df_train[col].value_counts().to_dict()
+    count_cols[col + '_count'] = df_train[col].map(lambda x: u.get(x))
+    print(col)
+
+df_train_onehot = df_train.drop(col_cat + drop_features + col_bin, axis=1)
+df_train_onehot = pd.concat([df_train_onehot, onehot_cols, match_cols, diff_e, count_cols, df_match_code], axis=1)
+df_train_onehot = df_train_onehot.astype('float')
+df_train_onehot.info()
+
+# +
+# onehot_cat
+count = 0
+for col in col_cat:
+    if count == 0 :
+        onehot_cols = pd.get_dummies(df_test[col], prefix=col)
+        count += 1
+    else:
+        onehot_cols = pd.concat([onehot_cols, pd.get_dummies(df_test[col], prefix=col)], axis=1)
+
+# col_match
+count = 0
+for col in col_match:
+    df = pd.DataFrame(df_test[col] == df_test['contents_attribute_{}'.format(col[-1])], columns=['match_{}'.format(col[-1])])
+    if count == 0 :
+        match_cols = df
+        count += 1
+    else:
+        match_cols = pd.concat([match_cols, df], axis=1)
+
+        
+# diff_e
+diff_e = pd.DataFrame(abs(df_test['contents_attribute_e'] - df_test['person_prefer_e']), columns=['diff_e'])
+
+col_d = [x for x in col_code if 'd' in x and 'person' in x]
+col_h = [x for x in col_code if 'h' in x and 'person' in x]
+
+# match_code
+match_code = []
+for col in col_d:
+    match_code.append(is_match(col, 'contents_attribute_d', df_test, code_d))
+    
+for col in col_h:
+    match_code.append(is_match(col, 'contents_attribute_h', df_test, code_h))
+
+df_match_code = pd.concat(match_code, axis=1)
+
+df_match_code['match_sum'] = df_match_code.sum(axis=1) # match_ sum
+
+# count_cols
+count_cols = pd.DataFrame()
+for col in col_cnt + col_cat + col_code: 
+    u = df_train[col].value_counts().to_dict()
+    count_cols[col + '_count'] = df_test[col].map(lambda x: u.get(x, 0))
+    print(col)
+
+
+df_test_onehot = df_test.drop(col_cat+ drop_features + col_bin,  axis=1)
+df_test_onehot = pd.concat([df_test_onehot, onehot_cols, match_cols, diff_e, count_cols, df_match_code], axis=1)
+df_test_onehot = df_test_onehot.astype(float)
+df_test_onehot.info()
+# -
+
+y = df_train_onehot.pop('target')
+X = ssp.csr_matrix(df_train_onehot.values)
+X_test = ssp.csr_matrix(df_test_onehot.values)
+
+params = {"objective": "binary",
+         "boosting_type": 'gbdt',
+         "learning_rate": 0.1,
+         "num_leaves": 15,
+         "max_depth": 5,
+         "max_bin": 256,
+         "feature_fraction": 0.6,
+         "verbosity": -1,
+         "drop_rate": 0.1,
+         "is_unbalance": False,
+         "max_drop": 50,
+         "min_child_samples": 2000,
+         "min_child_weight": 150,
+         "min_split_gain": 0,
+         "subsample": 0.9,
+         "early_stopping_rounds": 100,
+         "device_type": 'gpu'
+         }
+
+# +
+NFOLDS = 5
+kfold = StratifiedKFold(n_splits=NFOLDS, shuffle=True, random_state=112)
+num_boost_round = 10000
+
+
+final_cv_train = np.zeros(len(df_train))
+final_cv_pred = np.zeros(len(df_test))
+
+begin_time = time()
+
+for s in range(3):
+
+    cv_train = np.zeros(len(df_train))
+    cv_pred = np.zeros(len(df_test))
+
+    params['seed'] = s
+        
+    best_trees = []
+    fold_scores = []
+    
+    kf = kfold.split(X, y)
+    
+    for i, (t, v) in enumerate(kf):
+        X_train, X_val, y_train, y_val = X[t, :], X[v, :], y[t], y[v]
+        ds_train = lgb.Dataset(X_train, y_train)
+        ds_val = lgb.Dataset(X_val, y_val)
+        
+        bst = lgb.train(
+            params, 
+            ds_train, 
+            num_boost_round,
+            valid_sets=ds_val,
+            feval=eval_f1,
+            verbose_eval=100,
+
+        )
+        
+        best_trees.append(bst.best_iteration)
+        
+        cv_train[v] += bst.predict(X_val)
+        cv_pred += bst.predict(X_test, num_iteration=bst.best_iteration)
+
+        score = f1_score(y_val, round_pred(cv_train[v]))
+        print(score)
+        fold_scores.append(score)
+        print(str(datetime.timedelta(seconds=time() - begin_time)))
+    
+    cv_pred /= NFOLDS
+    final_cv_pred += cv_pred
+
+    final_cv_train += cv_train
+    
+    print("cv score:")
+    print(f1_score(y, round_pred(cv_train)))
+    print("{} score:".format(s + 1), f1_score(y, round_pred(final_cv_train / (s + 1))))
+    print(fold_scores)
+    print(best_trees, np.mean(best_trees))
+    print(str(datetime.timedelta(seconds=time() - begin_time)))
+# -
+final_cv_pred/3
+
+final_cv_pred/3.
+
+df_cv = pd.DataFrame(round_pred(final_cv_pred/3), columns=['target'])
+df_cv.index.name = 'id'
+
+df_final = pd.DataFrame(final_cv_pred, columns=['target'])
+df_final.index.name = 'id'
+df_final.to_csv('match_code count_cat cnt code match_sum_3.csv')
+
+df_cv
+
+df_cv.to_csv('sub_match_code count_cat cnt code match_sum_3.csv')
+
+
+
+
+df_train_onehot.values

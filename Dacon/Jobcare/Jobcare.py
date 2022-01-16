@@ -270,6 +270,9 @@ df_cv.to_csv('sub_0.csv')
 # - match_code + count_cnt 0.6445
 # - match_code + count_cat/cnt/code 0.6527
 # - match_code + count_cat/cnt/code + match_sum 0.6535
+# - match_code + count_cat/cnt/code + match_sum + cnt onehot 0.6568
+# - match_code + count_cat/cnt/code + match_sum + target cnt 0.6534
+# - match_code + count_cat/cnt/code + match_sum + target cnt + new 0.6534
 
 code_d = pd.read_csv('Jobcare_data/속성_D_코드.csv', index_col='속성 D 코드')
 code_h = pd.read_csv('Jobcare_data/속성_H_코드.csv', index_col='속성 H 코드')
@@ -288,18 +291,44 @@ def get_freq(col):
     return col.value_counts()
 
 
-df_train.contents_attribute_e.value_counts()
+person_features = [c for c in df_train.columns if ('person_a' in c or 'person_p' in c)]
+df_new = pd.DataFrame()
+count = 0
+for col in person_features:
+    if count == 0:
+        df_new['person_new'] = df_train[col].astype(str) + '_'
+        count = 1
+    else:
+        df_new['person_new'] += df_train[col].astype(str) + '_'
+df_new
+
+df_new.value_counts()
+
+contents_features = [c for c in df_train.columns if 'contents_a' in c]
+df_new_c = pd.DataFrame()
+count = 0
+for col in contents_features:
+    if count == 0:
+        df_new_c['contents_new'] = df_train[col].astype(str) + '_'
+        count = 1
+    else:
+        df_new_c['contents_new'] += df_train[col].astype(str) + '_'
+df_new_c.value_counts()
+
+u = df_new['person_new'].value_counts().to_dict()
+df_new['person_new'] = df_new['person_new'].map(lambda x: u.get(x, 0))
+df_new
 
 # +
-# onehot_cat
+# onehot_cat & cnt
 count = 0
-for col in col_cat:
+for col in col_cat + col_cnt:
     if count == 0 :
         onehot_cols = pd.get_dummies(df_train[col], prefix=col)
         count += 1
     else:
         onehot_cols = pd.concat([onehot_cols, pd.get_dummies(df_train[col], prefix=col)], axis=1)
-
+        
 # match_cols
 count = 0
 for col in col_match:
@@ -335,21 +364,48 @@ for col in col_cnt + col_cat + col_code:
     count_cols[col + '_count'] = df_train[col].map(lambda x: u.get(x))
     print(col)
 
-df_train_onehot = df_train.drop(col_cat + drop_features + col_bin, axis=1)
-df_train_onehot = pd.concat([df_train_onehot, onehot_cols, match_cols, diff_e, count_cols, df_match_code], axis=1)
+# df_new
+
+person_features = [c for c in df_train.columns if ('person_a' in c or 'person_p' in c)]
+contents_features = [c for c in df_train.columns if 'contents_a' in c]
+df_new = pd.DataFrame()
+count = 0
+for col in person_features:
+    if count == 0:
+        df_new['person_new'] = df_train[col].astype(str) + '_'
+        count = 1
+    else:
+        df_new['person_new'] += df_train[col].astype(str) + '_'
+
+count = 0
+for col in contents_features:
+    if count == 0:
+        df_new['contents_new'] = df_train[col].astype(str) + '_'
+        count = 1
+    else:
+        df_new['contents_new'] += df_train[col].astype(str) + '_'        
+
+u_person = df_new['person_new'].value_counts().to_dict()
+u_contents = df_new['contents_new'].value_counts().to_dict()
+df_new['person_new'] = df_new['person_new'].map(lambda x: u_person.get(x, 0))
+df_new['contents_new'] = df_new['contents_new'].map(lambda x: u_contents.get(x, 0))
+
+
+df_train_onehot = df_train.drop(col_cat + col_cnt + drop_features + col_bin, axis=1)
+df_train_onehot = pd.concat([df_train_onehot, onehot_cols, match_cols, diff_e, count_cols, df_match_code, df_new], axis=1)
 df_train_onehot = df_train_onehot.astype('float')
 df_train_onehot.info()
 
 # +
-# onehot_cat
+# onehot_cat & cnt
 count = 0
-for col in col_cat:
+for col in col_cat + col_cnt:
     if count == 0 :
         onehot_cols = pd.get_dummies(df_test[col], prefix=col)
         count += 1
     else:
         onehot_cols = pd.concat([onehot_cols, pd.get_dummies(df_test[col], prefix=col)], axis=1)
-
+        
 # col_match
 count = 0
 for col in col_match:
@@ -386,9 +442,31 @@ for col in col_cnt + col_cat + col_code:
     count_cols[col + '_count'] = df_test[col].map(lambda x: u.get(x, 0))
     print(col)
 
+# df_new
 
-df_test_onehot = df_test.drop(col_cat+ drop_features + col_bin,  axis=1)
-df_test_onehot = pd.concat([df_test_onehot, onehot_cols, match_cols, diff_e, count_cols, df_match_code], axis=1)
+person_features = [c for c in df_train.columns if ('person_a' in c or 'person_p' in c)]
+df_new = pd.DataFrame()
+count = 0
+for col in person_features:
+    if count == 0:
+        df_new['person_new'] = df_test[col].astype(str) + '_'
+        count = 1
+    else:
+        df_new['person_new'] += df_test[col].astype(str) + '_'
+        
+count = 0
+for col in contents_features:
+    if count == 0:
+        df_new['contents_new'] = df_test[col].astype(str) + '_'
+        count = 1
+    else:
+        df_new['contents_new'] += df_test[col].astype(str) + '_'        
+
+df_new['person_new'] = df_new['person_new'].map(lambda x: u_person.get(x, 0))
+df_new['contents_new'] = df_new['contents_new'].map(lambda x: u_contents.get(x, 0))
+
+df_test_onehot = df_test.drop(col_cat + col_cnt + drop_features + col_bin,  axis=1)
+df_test_onehot = pd.concat([df_test_onehot, onehot_cols, match_cols, diff_e, count_cols, df_match_code, df_new], axis=1)
 df_test_onehot = df_test_onehot.astype(float)
 df_test_onehot.info()
 # -
@@ -421,13 +499,48 @@ NFOLDS = 5
 kfold = StratifiedKFold(n_splits=NFOLDS, shuffle=True, random_state=112)
 num_boost_round = 10000
 
+kf = kfold.split(X, y)
+
+(t, v) = next(kf)
+
+X_train, X_val, y_train, y_val = X[t, :], X[v, :], y[t], y[v]
+ds_train = lgb.Dataset(X_train, y_train)
+ds_val = lgb.Dataset(X_val, y_val)
+
+record = {}
+record_eval = lgb.record_evaluation(record)
+early = lgb.early_stopping(100)
+
+bst = lgb.train(
+            params, 
+            ds_train, 
+            num_boost_round,
+            valid_sets=ds_val,
+            feval=eval_f1,
+            verbose_eval=100,
+
+        )
+
+print('best score: {}'.format(bst.best_score))
+# -
+
+df_fi = pd.DataFrame(bst.feature_importance(), columns=['importance'])
+df_fi['name'] = df_train_onehot.columns
+df_fi = df_fi.sort_values('importance', ascending=False)
+df_fi.to_csv('feature_importance_2.csv')
+
+# +
+NFOLDS = 5
+kfold = StratifiedKFold(n_splits=NFOLDS, shuffle=True, random_state=112)
+num_boost_round = 10000
+
 
 final_cv_train = np.zeros(len(df_train))
 final_cv_pred = np.zeros(len(df_test))
 
 begin_time = time()
 
-for s in range(3):
+for s in range(1):
 
     cv_train = np.zeros(len(df_train))
     cv_pred = np.zeros(len(df_test))
@@ -476,9 +589,40 @@ for s in range(3):
     print(best_trees, np.mean(best_trees))
     print(str(datetime.timedelta(seconds=time() - begin_time)))
 # -
-final_cv_pred/3
+final_cv_pred
 
-final_cv_pred/3.
+# +
+import copy
+
+def threshold(pred, th=0.5):
+    l = copy.deepcopy(pred)
+    for i, p in enumerate(pred):
+        if (p > th):
+            l[i] = 1
+        else:
+            l[i] = 0
+    return l
+
+
+# -
+
+df_final = pd.read_csv('match_code count_cat cnt code match_sum_3.csv', index_col='id')
+final_pred = df_final.values
+final_pred /= 3
+final_pred
+
+df = pd.DataFrame(final_cv_train)
+df.describe()
+
+
+
+f1_score(y, np.squeeze(threshold(final_cv_train, th=0.35)))
+
+df_th = pd.DataFrame(np.squeeze(threshold(final_cv_pred, th=0.35)), columns=['target'])
+df_th.index.name = 'id'
+df_th
+
+df_th.to_csv('sub_th.csv')
 
 df_cv = pd.DataFrame(round_pred(final_cv_pred/3), columns=['target'])
 df_cv.index.name = 'id'
@@ -494,4 +638,66 @@ df_cv.to_csv('sub_match_code count_cat cnt code match_sum_3.csv')
 
 
 
-df_train_onehot.values
+# ## 3. catboost
+
+# +
+from catboost import Pool, CatBoostClassifier
+from scipy import sparse as ssp
+from sklearn.model_selection import StratifiedKFold
+from sklearn.preprocessing import LabelEncoder
+from sklearn.preprocessing import OneHotEncoder
+from sklearn.metrics import f1_score
+
+from time import time
+import datetime
+# +
+NFOLDS = 5
+kfold = StratifiedKFold(n_splits=NFOLDS, shuffle=True, random_state=112)
+num_boost_round = 10000
+
+
+final_cv_train = np.zeros(len(df_train))
+final_cv_pred = np.zeros(len(df_test))
+
+begin_time = time()
+
+for s in range(1):
+
+    cv_train = np.zeros(len(df_train))
+    cv_pred = np.zeros(len(df_test))
+        
+    best_trees = []
+    fold_scores = []
+    
+    kf = kfold.split(X, y)
+    
+    for i, (t, v) in enumerate(kf):
+        X_train, X_val, y_train, y_val = X[t, :], X[v, :], y[t], y[v]
+        
+        model = CatBoostClassifier(iterations=10000, random_state=s, task_type='GPU', eval_metric='F1')
+        model.fit(X_train, y_train,
+                 eval_set=[(X_val, y_val)],
+                 early_stopping_rounds=100,
+                 verbose=100
+                 )
+        
+        cv_train[v] += model.predict(X_val)
+        cv_pred += model.predict(X_test)
+
+        score = f1_score(y_val, round_pred(cv_train[v]))
+        print(score)
+        fold_scores.append(score)
+        print(str(datetime.timedelta(seconds=time() - begin_time)))
+    
+    cv_pred /= NFOLDS
+    final_cv_pred += cv_pred
+
+    final_cv_train += cv_train
+    
+    print("cv score:")
+    print(f1_score(y, round_pred(cv_train)))
+    print("{} score:".format(s + 1), f1_score(y, round_pred(final_cv_train / (s + 1))))
+    print(fold_scores)
+    print(best_trees, np.mean(best_trees))
+    print(str(datetime.timedelta(seconds=time() - begin_time)))
+

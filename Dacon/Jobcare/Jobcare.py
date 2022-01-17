@@ -151,7 +151,7 @@ def round_pred(pred):
 
 def eval_f1(preds, dtrain):
     labels = dtrain.get_label()
-    preds = list(map(round, preds))
+    preds = threshold(preds, th=0.5)
     return 'f1', f1_score(labels, preds), True
 
 
@@ -272,7 +272,9 @@ df_cv.to_csv('sub_0.csv')
 # - match_code + count_cat/cnt/code + match_sum 0.6535
 # - match_code + count_cat/cnt/code + match_sum + cnt onehot 0.6568
 # - match_code + count_cat/cnt/code + match_sum + target cnt 0.6534
-# - match_code + count_cat/cnt/code + match_sum + target cnt + new 0.6534
+# - match_code + count_cat/cnt/code + match_sum + target cnt + new 0.6575
+# - match_code + count_cat/cnt/code + match_sum + target cnt + new - below 10 0.6584
+# - match_code + count_cat/cnt/code + match_sum + target cnt + new - below 20 0.6566
 
 code_d = pd.read_csv('Jobcare_data/속성_D_코드.csv', index_col='속성 D 코드')
 code_h = pd.read_csv('Jobcare_data/속성_H_코드.csv', index_col='속성 H 코드')
@@ -282,42 +284,22 @@ code_d.head()
 # return d_l/m/s_match_yn dataframes
 def is_match(col_p, col_c, df, code):
     df_m = code.loc[df[col_p], :].reset_index() == code.loc[df[col_c], :].reset_index()
-    for n in df_m.columns:
-        df_m = df_m.rename({n: n + col_p[-1]}, axis=1)
+    df_m.add_prefix(col_p[-1])
     return df_m
 
 
-def get_freq(col):
-    return col.value_counts()
+# +
+import copy
 
+def threshold(pred, th=0.5):
+    l = copy.deepcopy(pred)
+    for i, p in enumerate(pred):
+        if (p > th):
+            l[i] = 1
+        else:
+            l[i] = 0
+    return l
 
-person_features = [c for c in df_train.columns if ('person_a' in c or 'person_p' in c)]
-df_new = pd.DataFrame()
-count = 0
-for col in person_features:
-    if count == 0:
-        df_new['person_new'] = df_train[col].astype(str) + '_'
-        count = 1
-    else:
-        df_new['person_new'] += df_train[col].astype(str) + '_'
-df_new
-
-df_new.value_counts()
-
-contents_features = [c for c in df_train.columns if 'contents_a' in c]
-df_new_c = pd.DataFrame()
-count = 0
-for col in contents_features:
-    if count == 0:
-        df_new_c['contents_new'] = df_train[col].astype(str) + '_'
-        count = 1
-    else:
-        df_new_c['contents_new'] += df_train[col].astype(str) + '_'
-df_new_c.value_counts()
-
-u = df_new['person_new'].value_counts().to_dict()
-df_new['person_new'] = df_new['person_new'].map(lambda x: u.get(x, 0))
-df_new
 
 # +
 # onehot_cat & cnt
@@ -342,26 +324,43 @@ for col in col_match:
 # diff_e
 diff_e = pd.DataFrame(abs(df_train['contents_attribute_e'] - df_train['person_prefer_e']), columns=['diff_e'])
 
-col_d = [x for x in col_code if 'd' in x and 'person' in x]
-col_h = [x for x in col_code if 'h' in x and 'person' in x]
+col_d_p = [x for x in col_code if 'd' in x and 'person' in x]
+col_h_p = [x for x in col_code if 'h' in x and 'person' in x]
 
 # match_code
 match_code = []
-for col in col_d:
+for col in col_d_p:
     match_code.append(is_match(col, 'contents_attribute_d', df_train, code_d))
     
-for col in col_h:
+for col in col_h_p:
     match_code.append(is_match(col, 'contents_attribute_h', df_train, code_h))
 
 df_match_code = pd.concat(match_code, axis=1)
 
 df_match_code['match_sum'] = df_match_code.sum(axis=1) # match_ sum
 
+# df_code
+col_d = col_d_p + ['contents_attribute_d']
+col_h = col_h_p + ['contents_attribute_h']
+
+df_code_train = []
+
+for col in col_d:
+    df_code_train.append(code_d.loc[df_train[col], :].reset_index().add_prefix(col + '_'))
+for col in col_h:
+    df_code_train.append(code_h.loc[df_train[col], :].reset_index().add_prefix(col + '_'))
+df_code_train = pd.concat(df_code_train, axis=1)
+
 # count_cols
 count_cols = pd.DataFrame()
 for col in col_cnt + col_cat + col_code: 
     u = df_train[col].value_counts().to_dict()
-    count_cols[col + '_count'] = df_train[col].map(lambda x: u.get(x))
+    count_cols[col + '_count'] = df_train[col].map(lambda x: u.get(x, 0))
+    print(col)
+
+for col in df_code_train.columns:
+    u = df_code_train[col].value_counts().to_dict()
+    count_cols[col + '_count'] = df_code_train[col].map(lambda x:u.get(x, 0))
     print(col)
 
 # df_new
@@ -391,8 +390,8 @@ df_new['person_new'] = df_new['person_new'].map(lambda x: u_person.get(x, 0))
 df_new['contents_new'] = df_new['contents_new'].map(lambda x: u_contents.get(x, 0))
 
 
-df_train_onehot = df_train.drop(col_cat + col_cnt + drop_features + col_bin, axis=1)
-df_train_onehot = pd.concat([df_train_onehot, onehot_cols, match_cols, diff_e, count_cols, df_match_code, df_new], axis=1)
+df_train_onehot = df_train.drop(col_cat + col_cnt + drop_features + col_bin + col_d + col_h, axis=1)
+df_train_onehot = pd.concat([df_train_onehot, onehot_cols, match_cols, diff_e, df_match_code, df_code_train, count_cols,  df_new], axis=1)
 df_train_onehot = df_train_onehot.astype('float')
 df_train_onehot.info()
 
@@ -406,7 +405,7 @@ for col in col_cat + col_cnt:
     else:
         onehot_cols = pd.concat([onehot_cols, pd.get_dummies(df_test[col], prefix=col)], axis=1)
         
-# col_match
+# match_cols
 count = 0
 for col in col_match:
     df = pd.DataFrame(df_test[col] == df_test['contents_attribute_{}'.format(col[-1])], columns=['match_{}'.format(col[-1])])
@@ -435,11 +434,29 @@ df_match_code = pd.concat(match_code, axis=1)
 
 df_match_code['match_sum'] = df_match_code.sum(axis=1) # match_ sum
 
+# df_code
+col_d = col_d_p + ['contents_attribute_d']
+col_h = col_h_p + ['contents_attribute_h']
+
+df_code_test = []
+
+for col in col_d:
+    df_code_test.append(code_d.loc[df_test[col], :].reset_index().add_prefix(col + '_'))
+for col in col_h:
+    df_code_test.append(code_h.loc[df_test[col], :].reset_index().add_prefix(col + '_'))
+df_code_test = pd.concat(df_code_test, axis=1)
+
+
 # count_cols
 count_cols = pd.DataFrame()
 for col in col_cnt + col_cat + col_code: 
     u = df_train[col].value_counts().to_dict()
     count_cols[col + '_count'] = df_test[col].map(lambda x: u.get(x, 0))
+    print(col)
+
+for col in df_code_test.columns:
+    u = df_code_train[col].value_counts().to_dict()
+    count_cols[col + '_count'] = df_code_test[col].map(lambda x:u.get(x, 0))
     print(col)
 
 # df_new
@@ -465,11 +482,18 @@ for col in contents_features:
 df_new['person_new'] = df_new['person_new'].map(lambda x: u_person.get(x, 0))
 df_new['contents_new'] = df_new['contents_new'].map(lambda x: u_contents.get(x, 0))
 
-df_test_onehot = df_test.drop(col_cat + col_cnt + drop_features + col_bin,  axis=1)
-df_test_onehot = pd.concat([df_test_onehot, onehot_cols, match_cols, diff_e, count_cols, df_match_code, df_new], axis=1)
+df_test_onehot = df_test.drop(col_cat + col_cnt + drop_features + col_bin + col_d + col_h,  axis=1)
+df_test_onehot = pd.concat([df_test_onehot, onehot_cols, match_cols, diff_e, df_match_code, df_code_test, count_cols, df_new], axis=1)
 df_test_onehot = df_test_onehot.astype(float)
 df_test_onehot.info()
 # -
+
+df_fi = pd.read_csv('feature_importance_4.csv', index_col=0)
+not_imp_fea = df_fi.loc[df_fi['importance'] < 15, 'name'].values
+len(not_imp_fea)
+
+df_train_onehot.drop(not_imp_fea, axis=1, inplace=True)
+df_test_onehot.drop(not_imp_fea, axis=1, inplace=True)
 
 y = df_train_onehot.pop('target')
 X = ssp.csr_matrix(df_train_onehot.values)
@@ -479,7 +503,7 @@ params = {"objective": "binary",
          "boosting_type": 'gbdt',
          "learning_rate": 0.1,
          "num_leaves": 15,
-         "max_depth": 5,
+         "max_depth": -1,
          "max_bin": 256,
          "feature_fraction": 0.6,
          "verbosity": -1,
@@ -490,7 +514,7 @@ params = {"objective": "binary",
          "min_child_weight": 150,
          "min_split_gain": 0,
          "subsample": 0.9,
-         "early_stopping_rounds": 100,
+         "early_stopping_rounds": 150,
          "device_type": 'gpu'
          }
 
@@ -522,12 +546,13 @@ bst = lgb.train(
         )
 
 print('best score: {}'.format(bst.best_score))
+# 0.701287
 # -
 
 df_fi = pd.DataFrame(bst.feature_importance(), columns=['importance'])
 df_fi['name'] = df_train_onehot.columns
 df_fi = df_fi.sort_values('importance', ascending=False)
-df_fi.to_csv('feature_importance_2.csv')
+df_fi.to_csv('feature_importance_4.csv')
 
 # +
 NFOLDS = 5
@@ -540,7 +565,7 @@ final_cv_pred = np.zeros(len(df_test))
 
 begin_time = time()
 
-for s in range(1):
+for s in range(6):
 
     cv_train = np.zeros(len(df_train))
     cv_pred = np.zeros(len(df_test))
@@ -572,7 +597,7 @@ for s in range(1):
         cv_train[v] += bst.predict(X_val)
         cv_pred += bst.predict(X_test, num_iteration=bst.best_iteration)
 
-        score = f1_score(y_val, round_pred(cv_train[v]))
+        score = f1_score(y_val, threshold(cv_train[v], th=0.36))
         print(score)
         fold_scores.append(score)
         print(str(datetime.timedelta(seconds=time() - begin_time)))
@@ -583,60 +608,31 @@ for s in range(1):
     final_cv_train += cv_train
     
     print("cv score:")
-    print(f1_score(y, round_pred(cv_train)))
-    print("{} score:".format(s + 1), f1_score(y, round_pred(final_cv_train / (s + 1))))
+    print(f1_score(y, threshold(cv_train, th=0.36)))
+    print("{} score:".format(s + 1), f1_score(y, threshold(final_cv_train / (s + 1), th=0.36)))
     print(fold_scores)
     print(best_trees, np.mean(best_trees))
     print(str(datetime.timedelta(seconds=time() - begin_time)))
 # -
+df_final_pred = pd.DataFrame(final_cv_pred, columns=['target'])
+df_final_pred.index.name = 'id'
+df_final_pred.to_csv('th_5_code_test.csv')
+df_final_train = pd.DataFrame(final_cv_train, columns=['target'])
+df_final_train.index.name = 'id'
+df_final_train.to_csv('th_5_code_train.csv')
+
+for i in range(30, 50):
+    th = i/100
+    
+    print(i, f1_score(y, np.squeeze(threshold(final_cv_train/6, th=th))))
+
 final_cv_pred
 
-# +
-import copy
+df_th5 = pd.DataFrame(np.squeeze(threshold(final_cv_pred/6, th=0.36)), columns=['target'])
+df_th5.index.name = 'id'
+df_th5
 
-def threshold(pred, th=0.5):
-    l = copy.deepcopy(pred)
-    for i, p in enumerate(pred):
-        if (p > th):
-            l[i] = 1
-        else:
-            l[i] = 0
-    return l
-
-
-# -
-
-df_final = pd.read_csv('match_code count_cat cnt code match_sum_3.csv', index_col='id')
-final_pred = df_final.values
-final_pred /= 3
-final_pred
-
-df = pd.DataFrame(final_cv_train)
-df.describe()
-
-
-
-f1_score(y, np.squeeze(threshold(final_cv_train, th=0.35)))
-
-df_th = pd.DataFrame(np.squeeze(threshold(final_cv_pred, th=0.35)), columns=['target'])
-df_th.index.name = 'id'
-df_th
-
-df_th.to_csv('sub_th.csv')
-
-df_cv = pd.DataFrame(round_pred(final_cv_pred/3), columns=['target'])
-df_cv.index.name = 'id'
-
-df_final = pd.DataFrame(final_cv_pred, columns=['target'])
-df_final.index.name = 'id'
-df_final.to_csv('match_code count_cat cnt code match_sum_3.csv')
-
-df_cv
-
-df_cv.to_csv('sub_match_code count_cat cnt code match_sum_3.csv')
-
-
-
+df_th36.to_csv('sub_th5_code.csv')
 
 # ## 3. catboost
 

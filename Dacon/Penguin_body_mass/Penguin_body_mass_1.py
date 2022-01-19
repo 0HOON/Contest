@@ -689,7 +689,7 @@ ds_val = ds_.skip(train_n)
 
 AUTOTUNE = tf.data.experimental.AUTOTUNE
 
-ds_train = ds_train = (
+ds_train = (
     ds_train
     .batch(32)
     .cache()

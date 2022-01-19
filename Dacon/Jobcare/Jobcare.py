@@ -278,13 +278,14 @@ df_cv.to_csv('sub_0.csv')
 
 code_d = pd.read_csv('Jobcare_data/속성_D_코드.csv', index_col='속성 D 코드')
 code_h = pd.read_csv('Jobcare_data/속성_H_코드.csv', index_col='속성 H 코드')
-code_d.head()
+code_l = pd.read_csv('Jobcare_data/속성_L_코드.csv', index_col='속성 L 코드')
+code_l.head()
 
 
 # return d_l/m/s_match_yn dataframes
 def is_match(col_p, col_c, df, code):
     df_m = code.loc[df[col_p], :].reset_index() == code.loc[df[col_c], :].reset_index()
-    df_m.add_prefix(col_p[-1])
+    df_m = df_m.add_prefix(col_p[-1])
     return df_m
 
 
@@ -335,6 +336,7 @@ for col in col_d_p:
 for col in col_h_p:
     match_code.append(is_match(col, 'contents_attribute_h', df_train, code_h))
 
+
 df_match_code = pd.concat(match_code, axis=1)
 
 df_match_code['match_sum'] = df_match_code.sum(axis=1) # match_ sum
@@ -349,6 +351,7 @@ for col in col_d:
     df_code_train.append(code_d.loc[df_train[col], :].reset_index().add_prefix(col + '_'))
 for col in col_h:
     df_code_train.append(code_h.loc[df_train[col], :].reset_index().add_prefix(col + '_'))
+df_code_train.append(code_l.loc[df_train['contents_attribute_l'], :].reset_index().add_prefix('contents_attribute_l_'))
 df_code_train = pd.concat(df_code_train, axis=1)
 
 # count_cols
@@ -390,7 +393,7 @@ df_new['person_new'] = df_new['person_new'].map(lambda x: u_person.get(x, 0))
 df_new['contents_new'] = df_new['contents_new'].map(lambda x: u_contents.get(x, 0))
 
 
-df_train_onehot = df_train.drop(col_cat + col_cnt + drop_features + col_bin + col_d + col_h, axis=1)
+df_train_onehot = df_train.drop(col_cat + col_cnt + drop_features + col_bin + col_code[:-2], axis=1)
 df_train_onehot = pd.concat([df_train_onehot, onehot_cols, match_cols, diff_e, df_match_code, df_code_train, count_cols,  df_new], axis=1)
 df_train_onehot = df_train_onehot.astype('float')
 df_train_onehot.info()
@@ -444,6 +447,7 @@ for col in col_d:
     df_code_test.append(code_d.loc[df_test[col], :].reset_index().add_prefix(col + '_'))
 for col in col_h:
     df_code_test.append(code_h.loc[df_test[col], :].reset_index().add_prefix(col + '_'))
+df_code_test.append(code_l.loc[df_test['contents_attribute_l'], :].reset_index().add_prefix('contents_attribute_l_'))
 df_code_test = pd.concat(df_code_test, axis=1)
 
 
@@ -482,13 +486,13 @@ for col in contents_features:
 df_new['person_new'] = df_new['person_new'].map(lambda x: u_person.get(x, 0))
 df_new['contents_new'] = df_new['contents_new'].map(lambda x: u_contents.get(x, 0))
 
-df_test_onehot = df_test.drop(col_cat + col_cnt + drop_features + col_bin + col_d + col_h,  axis=1)
+df_test_onehot = df_test.drop(col_cat + col_cnt + drop_features + col_bin + col_code[:-2],  axis=1)
 df_test_onehot = pd.concat([df_test_onehot, onehot_cols, match_cols, diff_e, df_match_code, df_code_test, count_cols, df_new], axis=1)
 df_test_onehot = df_test_onehot.astype(float)
 df_test_onehot.info()
 # -
 
-df_fi = pd.read_csv('feature_importance_4.csv', index_col=0)
+df_fi = pd.read_csv('feature_importance_5.csv', index_col=0)
 not_imp_fea = df_fi.loc[df_fi['importance'] < 15, 'name'].values
 len(not_imp_fea)
 
@@ -502,7 +506,7 @@ X_test = ssp.csr_matrix(df_test_onehot.values)
 params = {"objective": "binary",
          "boosting_type": 'gbdt',
          "learning_rate": 0.1,
-         "num_leaves": 15,
+         "num_leaves": 31,
          "max_depth": -1,
          "max_bin": 256,
          "feature_fraction": 0.6,
@@ -549,10 +553,15 @@ print('best score: {}'.format(bst.best_score))
 # 0.701287
 # -
 
+pred = bst.predict(X)
+for i in range(30, 50):
+    print(i/100, f1_score(y, threshold(pred, th=i/100)))
+#0.4 0.7271 num_leaves 31 max_depth -1
+
 df_fi = pd.DataFrame(bst.feature_importance(), columns=['importance'])
 df_fi['name'] = df_train_onehot.columns
 df_fi = df_fi.sort_values('importance', ascending=False)
-df_fi.to_csv('feature_importance_4.csv')
+df_fi.to_csv('feature_importance_5.csv')
 
 # +
 NFOLDS = 5
@@ -616,10 +625,10 @@ for s in range(6):
 # -
 df_final_pred = pd.DataFrame(final_cv_pred, columns=['target'])
 df_final_pred.index.name = 'id'
-df_final_pred.to_csv('th_5_code_test.csv')
+df_final_pred.to_csv('th_5_l_test.csv')
 df_final_train = pd.DataFrame(final_cv_train, columns=['target'])
 df_final_train.index.name = 'id'
-df_final_train.to_csv('th_5_code_train.csv')
+df_final_train.to_csv('th_5_l_train.csv')
 
 for i in range(30, 50):
     th = i/100
@@ -632,68 +641,178 @@ df_th5 = pd.DataFrame(np.squeeze(threshold(final_cv_pred/6, th=0.36)), columns=[
 df_th5.index.name = 'id'
 df_th5
 
-df_th36.to_csv('sub_th5_code.csv')
+df_th5.to_csv('sub_th5_l_code.csv')
 
-# ## 3. catboost
+nn_cv_pred = pd.read_csv('nn_cv_pred.csv', index_col='id')
+nn_cv_train = pd.read_csv('nn_cv_train.csv', index_col='id')
+
+final_cv_pred / 6
+
+final_en_train = (final_cv_train / 6) * 0.5  + (np.squeeze(nn_cv_train.values)) * 0.5
+final_en_train
+
+for i in range(30, 50):
+    th = i/100
+    print(th, f1_score(y, threshold(final_en_train, th=th)))
+
+final_en_pred = (final_cv_pred / 6) * 0.5  + (np.squeeze(nn_cv_pred.values) / 5 ) * 0.5
+final_en_pred
+
+sub_en_pred = pd.DataFrame(threshold(final_en_pred, th=0.37), columns=['target'])
+sub_en_pred.index.name = 'id'
+sub_en_pred.to_csv('sub_en.csv')
+
+
+# ## 3. NN model
+
+def mk_Dataset(X, y):
+    ds_ = tf.data.Dataset.from_tensor_slices((X.values.astype(float), y.values.astype(float)))
+
+    AUTOTUNE = tf.data.experimental.AUTOTUNE
+
+    ds = (
+        ds_
+        .batch(32)
+        .cache()
+        .prefetch(buffer_size=AUTOTUNE)
+    )
+    
+    return ds
+
+
+def Dense_model():
+    
+    model = keras.Sequential([
+        layers.Dense(512, input_shape=[43], kernel_initializer=keras.initializers.he_normal()),
+        layers.PReLU(),
+        layers.BatchNormalization(),
+        layers.Dropout(0.5),
+
+        layers.Dense(128, kernel_initializer=keras.initializers.he_normal()),
+        layers.PReLU(),
+        layers.BatchNormalization(),
+        layers.Dropout(0.5),
+
+        layers.Dense(1, kernel_initializer=keras.initializers.he_normal(), activation='relu')
+
+    ])
+    
+    model.compile(optimizer=keras.optimizers.Adam(learning_rate=0.01), loss="mse")
+    
+    return model
+
+
+def f1_metrics(y_true, y_pred):
+    
+
+
+df_train_onehot.info()
 
 # +
-from catboost import Pool, CatBoostClassifier
-from scipy import sparse as ssp
-from sklearn.model_selection import StratifiedKFold
-from sklearn.preprocessing import LabelEncoder
-from sklearn.preprocessing import OneHotEncoder
-from sklearn.metrics import f1_score
+y = df_train_onehot.pop('target')
+X_cnt = ssp.csr_matrix(df_train_cnt.values)
+X_cat = ssp.csr_matrix(df_train_cat.values)
 
-from time import time
-import datetime
+X_cnt_test = ssp.csr_matrix(df_test_cnt.values)
+X_cat_test = ssp.csr_matrix(df_test_cat.values)
+
 # +
+from keras.layers import Dense, Dropout, Embedding, Flatten, Input, Add
+
+inputs = []
+flatten_layers = []
+
+for e, c in enumerate(emb_col):
+  input_c = Input(shape=(1, ))
+  num_c = df_train_cat[c].max()
+  embed_c = Embedding(output_dim=num_c, input_dim=6, input_length=1)(input_c)
+  embed_c = Dropout(0.25)(embed_c)
+  flatten_c = Flatten()(embed_c)
+  inputs.append(input_c)
+  flatten_layers.append(flatten_c)
+
+input_cnt = layers.Input(shape=(X_cnt.shape[1],), dtype='float64')
+flatten_layers.append(input_cnt)
+inputs.append(input_cnt)
+
+flatten = layers.add(flatten_layers)
+
+model = keras.Sequential([
+        layers.Dense(512, kernel_initializer=keras.initializers.he_normal()),
+        layers.PReLU(),
+        layers.BatchNormalization(),
+        layers.Dropout(0.75),
+
+        layers.Dense(64, kernel_initializer=keras.initializers.he_normal()),
+        layers.PReLU(),
+        layers.BatchNormalization(),
+        layers.Dropout(0.5),
+
+        layers.Dense(1, kernel_initializer=keras.initializers.he_normal(), activation='sigmoid')
+
+    ])(flatten)
+    
+model.compile(optimizer='adam', loss="binary_crossentropy")
+
 NFOLDS = 5
 kfold = StratifiedKFold(n_splits=NFOLDS, shuffle=True, random_state=112)
-num_boost_round = 10000
+
+kf = kfold.split(X, y)
+
+(t, v) = next(kf)
+
+ds_train = mk_Dataset(df_train_onehot.loc[t, :], y[t])
+ds_val = mk_Dataset(df_train_onehot.loc[v, :], y[v])
+
+early = keras.callbacks.EarlyStopping(patience=100, restore_best_weights=True)
+
+history = model.fit(
+        ds_train,
+        validation_data=ds_val,
+#        verbose=0,
+        callbacks=[early],
+        epochs=20
+    )
+# -
 
 
-final_cv_train = np.zeros(len(df_train))
-final_cv_pred = np.zeros(len(df_test))
 
-begin_time = time()
+# +
+from sklearn.model_selection import StratifiedKFold
 
-for s in range(1):
+NFOLDS = 5
 
-    cv_train = np.zeros(len(df_train))
-    cv_pred = np.zeros(len(df_test))
+kfold = StratifiedKFold(n_splits=NFOLDS, shuffle=True, random_state = 102)
+
+num_seeds = 5
+cv_train = np.zeros(len(df_train_target))
+cv_pred = np.zeros(len(df_test_target))
+
+early = keras.callbacks.EarlyStopping(patience=300, restore_best_weights=True)
+
+for s in range(num_seeds):
+    
+    np.random.seed(s)
+
+    for (tr_idx, te_idx) in kfold.split(df_train_target, df_train_y):
+        ds_train = mk_Dataset(df_train_target.loc[tr_idx, :], df_train_y.loc[tr_idx])
+        ds_test = mk_Dataset(df_train_target.loc[te_idx, :], df_train_y.loc[te_idx])
         
-    best_trees = []
-    fold_scores = []
-    
-    kf = kfold.split(X, y)
-    
-    for i, (t, v) in enumerate(kf):
-        X_train, X_val, y_train, y_val = X[t, :], X[v, :], y[t], y[v]
+        model = Dense_model()
         
-        model = CatBoostClassifier(iterations=10000, random_state=s, task_type='GPU', eval_metric='F1')
-        model.fit(X_train, y_train,
-                 eval_set=[(X_val, y_val)],
-                 early_stopping_rounds=100,
-                 verbose=100
-                 )
+        model.fit(
+            ds_train,
+            validation_data=ds_test,
+            verbose=0,
+            callbacks=[early],
+            epochs=2000
+        )
         
-        cv_train[v] += model.predict(X_val)
-        cv_pred += model.predict(X_test)
+        cv_train[te_idx] += np.squeeze(model.predict(df_train_target.loc[te_idx, :].values.astype(float)))
+        print("mse: {}".format(get_mse( cv_train[te_idx] / (s + 1) , df_train_y[te_idx]) ))
 
-        score = f1_score(y_val, round_pred(cv_train[v]))
-        print(score)
-        fold_scores.append(score)
-        print(str(datetime.timedelta(seconds=time() - begin_time)))
-    
-    cv_pred /= NFOLDS
-    final_cv_pred += cv_pred
+        cv_pred += np.squeeze(model.predict(df_test_target.values.astype(float)))
 
-    final_cv_train += cv_train
-    
-    print("cv score:")
-    print(f1_score(y, round_pred(cv_train)))
-    print("{} score:".format(s + 1), f1_score(y, round_pred(final_cv_train / (s + 1))))
-    print(fold_scores)
-    print(best_trees, np.mean(best_trees))
-    print(str(datetime.timedelta(seconds=time() - begin_time)))
-
+    print("-----------------")
+    print("seed{}_mse: {}".format(s, get_mse(cv_train / (s + 1), df_train_y)))
+    print("-----------------")

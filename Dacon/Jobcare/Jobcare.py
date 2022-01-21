@@ -259,7 +259,7 @@ y
 
 df_cv.to_csv('sub_0.csv')
 
-# ## 2-2 One hot encoding & match / diff
+# ### 2-2 One hot encoding & match / diff
 
 # f1
 # - onehot 0.644~
@@ -325,10 +325,10 @@ for col in col_match:
 # diff_e
 diff_e = pd.DataFrame(abs(df_train['contents_attribute_e'] - df_train['person_prefer_e']), columns=['diff_e'])
 
+# match_code
 col_d_p = [x for x in col_code if 'd' in x and 'person' in x]
 col_h_p = [x for x in col_code if 'h' in x and 'person' in x]
 
-# match_code
 match_code = []
 for col in col_d_p:
     match_code.append(is_match(col, 'contents_attribute_d', df_train, code_d))
@@ -349,14 +349,17 @@ df_code_train = []
 
 for col in col_d:
     df_code_train.append(code_d.loc[df_train[col], :].reset_index().add_prefix(col + '_'))
+    
 for col in col_h:
     df_code_train.append(code_h.loc[df_train[col], :].reset_index().add_prefix(col + '_'))
+    
 df_code_train.append(code_l.loc[df_train['contents_attribute_l'], :].reset_index().add_prefix('contents_attribute_l_'))
+
 df_code_train = pd.concat(df_code_train, axis=1)
 
 # count_cols
 count_cols = pd.DataFrame()
-for col in col_cnt + col_cat + col_code: 
+for col in col_cnt + col_cat + col_code[-2:]: 
     u = df_train[col].value_counts().to_dict()
     count_cols[col + '_count'] = df_train[col].map(lambda x: u.get(x, 0))
     print(col)
@@ -367,7 +370,6 @@ for col in df_code_train.columns:
     print(col)
 
 # df_new
-
 person_features = [c for c in df_train.columns if ('person_a' in c or 'person_p' in c)]
 contents_features = [c for c in df_train.columns if 'contents_a' in c]
 df_new = pd.DataFrame()
@@ -389,13 +391,14 @@ for col in contents_features:
 
 u_person = df_new['person_new'].value_counts().to_dict()
 u_contents = df_new['contents_new'].value_counts().to_dict()
+
 df_new['person_new'] = df_new['person_new'].map(lambda x: u_person.get(x, 0))
 df_new['contents_new'] = df_new['contents_new'].map(lambda x: u_contents.get(x, 0))
 
 
 df_train_onehot = df_train.drop(col_cat + col_cnt + drop_features + col_bin + col_code[:-2], axis=1)
 df_train_onehot = pd.concat([df_train_onehot, onehot_cols, match_cols, diff_e, df_match_code, df_code_train, count_cols,  df_new], axis=1)
-df_train_onehot = df_train_onehot.astype('float')
+df_train_onehot = df_train_onehot.astype('float32')
 df_train_onehot.info()
 
 # +
@@ -453,7 +456,7 @@ df_code_test = pd.concat(df_code_test, axis=1)
 
 # count_cols
 count_cols = pd.DataFrame()
-for col in col_cnt + col_cat + col_code: 
+for col in col_cnt + col_cat + col_code[-2:]: 
     u = df_train[col].value_counts().to_dict()
     count_cols[col + '_count'] = df_test[col].map(lambda x: u.get(x, 0))
     print(col)
@@ -488,7 +491,7 @@ df_new['contents_new'] = df_new['contents_new'].map(lambda x: u_contents.get(x, 
 
 df_test_onehot = df_test.drop(col_cat + col_cnt + drop_features + col_bin + col_code[:-2],  axis=1)
 df_test_onehot = pd.concat([df_test_onehot, onehot_cols, match_cols, diff_e, df_match_code, df_code_test, count_cols, df_new], axis=1)
-df_test_onehot = df_test_onehot.astype(float)
+df_test_onehot = df_test_onehot.astype('float32')
 df_test_onehot.info()
 # -
 
@@ -561,7 +564,7 @@ for i in range(30, 50):
 df_fi = pd.DataFrame(bst.feature_importance(), columns=['importance'])
 df_fi['name'] = df_train_onehot.columns
 df_fi = df_fi.sort_values('importance', ascending=False)
-df_fi.to_csv('feature_importance_5.csv')
+df_fi.to_csv('feature_importance.csv')
 
 # +
 NFOLDS = 5
@@ -662,6 +665,120 @@ sub_en_pred = pd.DataFrame(threshold(final_en_pred, th=0.37), columns=['target']
 sub_en_pred.index.name = 'id'
 sub_en_pred.to_csv('sub_en.csv')
 
+# ### 2-3 embeding
+
+from keras.layers import Dense, PReLU, BatchNormalization, Dropout, Embedding, Flatten, Input, Concatenate
+from keras.models import Model
+
+code_d
+
+# +
+col_d = [x for x in col_code if '_d' in x]
+col_h = [x for x in col_code if '_h' in x]
+col_l = ['contents_attribute_l']
+
+d_max = 1258
+h_max = 314
+l_max = 2025
+
+output_dim = 32
+
+inputs = []
+flatten_layers = []
+
+# code d
+input_d = Input(shape=(4, ), dtype='int32')
+embed_d = Embedding(d_max, output_dim, input_length=4)(input_d)
+drop_d = Dropout(0.25)(embed_d)
+flatten_d = Flatten()(drop_d)
+inputs.append(input_d)
+flatten_layers.append(flatten_d)
+
+# code h
+input_h = Input(shape=(4, ), dtype='int32')
+embed_h = Embedding(h_max, output_dim, input_length=4)(input_h)
+drop_h = Dropout(0.25)(embed_h)
+flatten_h = Flatten()(drop_h)
+inputs.append(input_h)
+flatten_layers.append(flatten_h)
+
+# code l
+input_l = Input(shape=(1, ), dtype='int32')
+embed_l = Embedding(l_max, output_dim, input_length=1)(input_l)
+drop_l = Dropout(0.25)(embed_l)
+flatten_l = Flatten()(drop_l)
+inputs.append(input_l)
+flatten_layers.append(flatten_l)
+
+flatten = Concatenate()(flatten_layers)
+
+output = Dense(1, activation='sigmoid')(flatten)
+
+model = Model(inputs=inputs, outputs=output)
+model.compile(optimizer='adam', loss="binary_crossentropy", metrics=['accuracy'])
+
+# -
+
+df_emb_train = df_train.loc[:, col_d + col_h + col_l].copy().astype('int32')
+df_emb_test = df_test.loc[:, col_d + col_h + col_l].copy().astype('int32')
+df_emb.info()
+
+# +
+NFOLDS = 5
+kfold = StratifiedKFold(n_splits=NFOLDS, shuffle=True, random_state=112)
+
+kf = kfold.split(X, y)
+
+num_seeds = 1
+cv_train = np.zeros(len(df_train_onehot))
+cv_pred = np.zeros(len(df_test_onehot))
+
+x_test_list = []
+x_test_list.append(df_emb_test.loc[:, col_d].values.reshape(-1, 4))
+x_test_list.append(df_emb_test.loc[:, col_h].values.reshape(-1, 4))
+x_test_list.append(df_emb_test.loc[:, col_l].values.reshape(-1, 1))
+
+
+for s in range(num_seeds):
+    
+    np.random.seed(s)
+
+    for (t, v) in kfold.split(df_emb_train.values, y):
+        
+        ytr = y[t]       
+        yval = y[v]
+
+        xtr_list, xval_list = [], []
+
+        xtr_list.append(df_emb_train.loc[t, col_d].values.reshape(-1, 4))
+        xtr_list.append(df_emb_train.loc[t, col_h].values.reshape(-1, 4))
+        xtr_list.append(df_emb_train.loc[t, col_l].values.reshape(-1, 1))
+        
+        xval_list.append(df_emb_train.loc[v, col_d].values.reshape(-1, 4))
+        xval_list.append(df_emb_train.loc[v, col_h].values.reshape(-1, 4))
+        xval_list.append(df_emb_train.loc[v, col_l].values.reshape(-1, 1))
+
+        model.fit(
+            x = xtr_list,
+            y = ytr,
+            validation_data=[xval_list, yval],
+            batch_size=512,
+#            verbose=0,
+            epochs=20
+        )
+        
+        val_pred = np.squeeze(model.predict(xval_list))
+        cv_train[v] += val_pred
+        print("f1: {}".format(f1_score(y[v], threshold(val_pred, th=0.5))))
+
+        cv_pred += np.squeeze(model.predict(x_test_list))
+
+    print("-----------------")
+    print("seed{}_f1: {}".format(s, f1_score(y, threshold(cv_train / (s + 1), th=0.5))))
+    print("-----------------")
+
+
+# -
 
 # ## 3. NN model
 
@@ -703,7 +820,6 @@ def Dense_model():
 
 
 def f1_metrics(y_true, y_pred):
-    
 
 
 df_train_onehot.info()

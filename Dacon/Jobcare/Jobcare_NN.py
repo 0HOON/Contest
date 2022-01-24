@@ -204,12 +204,6 @@ df_new['contents_new'] = df_new['contents_new'].map(lambda x: u_contents.get(x, 
 
 df_train_cnt = pd.concat([match_cols, diff_e, df_match_code, count_cols,  df_new], axis=1)
 df_train_cnt = df_train_cnt.astype('float32')
-
-for col in df_train_cnt.columns: # min max scale
-    col_max = df_train_cnt[col].max()
-    col_min = df_train_cnt[col].min()
-    df_train_cnt[col] = (df_train_cnt[col] - col_min) / (col_max - col_min)
-
 df_train_cnt.info()
 
 # +
@@ -302,14 +296,14 @@ df_new['contents_new'] = df_new['contents_new'].map(lambda x: u_contents.get(x, 
 
 df_test_cnt = pd.concat([match_cols, diff_e, df_match_code, count_cols,  df_new], axis=1)
 df_test_cnt = df_test_cnt.astype('float32')
-
-for col in df_test_cnt.columns: # min max scale
-    col_max = df_train_cnt[col].max()
-    col_min = df_train_cnt[col].min()
-    df_test_cnt[col] = (df_test_cnt[col] - col_min) / (col_max - col_min)
-
 df_test_cnt.info()
 # -
+
+for col in df_train_cnt.columns: # min max scale
+    col_max = df_train_cnt[col].max()
+    col_min = df_train_cnt[col].min()
+    df_train_cnt[col] = (df_train_cnt[col] - col_min) / (col_max - col_min)
+    df_test_cnt[col] = (df_test_cnt[col] - col_min) / (col_max - col_min)
 
 df_train_emb = df_train.drop(drop_features + col_bin + col_code + ['target'], axis=1).astype('int32')
 df_test_emb = df_test.drop(drop_features + col_bin + col_code, axis=1).astype('int32')
@@ -327,7 +321,8 @@ d_max = 1258
 h_max = 314
 l_max = 2025
 
-
+# d, h, l 묶어서 emb
+ 
 def nn_model():
     inputs = []
     flatten_layers = []
@@ -361,7 +356,7 @@ def nn_model():
     for c in df_train_emb.columns:
         input_c = Input(shape=(1, ), dtype='int32')
         num_c = df_train_emb[c].max()
-        embed_c = Embedding(num_c, 8, input_length=1)(input_c)
+        embed_c = Embedding(num_c, 10, input_length=1)(input_c)
         embed_c = Dropout(0.25)(embed_c)
         flatten_c = Flatten()(embed_c)
         inputs.append(input_c)
@@ -409,6 +404,8 @@ kfold = StratifiedKFold(n_splits=NFOLDS, shuffle=True, random_state=112)
 
 kf = kfold.split(X_cnt_train, y)
 
+early = keras.callbacks.EarlyStopping(patience=10, restore_best_weights=True)
+
 (t, v) = next(kf)
 
 y_tr = y[t]
@@ -441,8 +438,9 @@ history = model.fit(
     x = x_tr,
     y = y_tr,
     validation_data=[x_val, y_val],
+    callbacks=[early],
     batch_size=512,
-    epochs=20
+    epochs=100
 )
 
 # +
@@ -499,26 +497,16 @@ df_pred.index.name = 'id'
 df_pred
 # -
 
-df_pred['target'] = threshold(df_pred['target'], th=0.39)
-df_pred
-
-df_pred.to_csv('nn_64_20.csv')
+df_pred.describe()
 
 df_pred[df_pred['target'] == 1].count()
 
 df_pred[df_pred['target'] < 0.4].count()
 
-# +
+df_pred['target'] = threshold(df_pred['target'], th=0.4)
+df_pred
 
-df_pred.to_csv('pred_256.csv')
-# -
-
-a = pd.read_csv('sub_th.csv', index_col='id')
-a.describe()
-
-
-
-
+df_pred.to_csv('nn_64_20_fix.csv')
 
 
 
@@ -595,3 +583,514 @@ for s in range(num_seeds):
     print("-----------------")
     print("seed{}_mse: {}".format(s, f1_score(y, threshold(cv_train / (s + 1), th=0.5))))
     print("-----------------")
+# -
+
+# ### 다른 방식으로 embedding
+
+# +
+'''# onehot_cat & cnt
+count = 0
+for col in col_cat + col_cnt:
+    if count == 0 :
+        onehot_cols = pd.get_dummies(df_train[col], prefix=col)
+        count += 1
+    else:
+        onehot_cols = pd.concat([onehot_cols, pd.get_dummies(df_train[col], prefix=col)], axis=1)'''
+        
+# match_cols
+count = 0
+for col in col_match:
+    df = pd.DataFrame(df_train[col] == df_train['contents_attribute_{}'.format(col[-1])], columns=['match_{}'.format(col[-1])])
+    if count == 0 :
+        match_cols = df
+        count += 1
+    else:
+        match_cols = pd.concat([match_cols, df], axis=1)
+        
+# diff_e 
+diff_e = pd.DataFrame(abs(df_train['contents_attribute_e'] - df_train['person_prefer_e']), columns=['diff_e'])
+
+# match_code
+col_d_p = [x for x in col_code if 'd' in x and 'person' in x]
+col_h_p = [x for x in col_code if 'h' in x and 'person' in x]
+
+match_code = []
+for col in col_d_p:
+    match_code.append(is_match(col, 'contents_attribute_d', df_train, code_d))
+    
+for col in col_h_p:
+    match_code.append(is_match(col, 'contents_attribute_h', df_train, code_h))
+
+
+df_match_code = pd.concat(match_code, axis=1)
+
+df_match_code['match_sum'] = df_match_code.sum(axis=1) # match_ sum
+
+# df_code   ####don't use####
+col_d = col_d_p + ['contents_attribute_d']
+col_h = col_h_p + ['contents_attribute_h']
+
+df_code_train = []
+
+for col in col_d:
+    df_code_train.append(code_d.loc[df_train[col], :].reset_index().add_prefix(col + '_'))
+    
+for col in col_h:
+    df_code_train.append(code_h.loc[df_train[col], :].reset_index().add_prefix(col + '_'))
+    
+df_code_train.append(code_l.loc[df_train['contents_attribute_l'], :].reset_index().add_prefix('contents_attribute_l_'))
+
+df_code_train = pd.concat(df_code_train, axis=1)
+
+# count_cols
+count_cols = pd.DataFrame()
+for col in col_cnt + col_cat + col_code[-2:]: 
+    u = df_train[col].value_counts().to_dict()
+    count_cols[col + '_count'] = df_train[col].map(lambda x: u.get(x, 0))
+    print(col)
+
+for col in df_code_train.columns:
+    u = df_code_train[col].value_counts().to_dict()
+    count_cols[col + '_count'] = df_code_train[col].map(lambda x:u.get(x, 0))
+    print(col)
+
+# df_new
+person_features = [c for c in df_train.columns if ('person_a' in c or 'person_p' in c)]
+contents_features = [c for c in df_train.columns if 'contents_a' in c]
+df_new = pd.DataFrame()
+count = 0
+for col in person_features:
+    if count == 0:
+        df_new['person_new'] = df_train[col].astype(str) + '_'
+        count = 1
+    else:
+        df_new['person_new'] += df_train[col].astype(str) + '_'
+
+count = 0
+for col in contents_features:
+    if count == 0:
+        df_new['contents_new'] = df_train[col].astype(str) + '_'
+        count = 1
+    else:
+        df_new['contents_new'] += df_train[col].astype(str) + '_'        
+
+u_person = df_new['person_new'].value_counts().to_dict()
+u_contents = df_new['contents_new'].value_counts().to_dict()
+
+df_new['person_new'] = df_new['person_new'].map(lambda x: u_person.get(x, 0))
+df_new['contents_new'] = df_new['contents_new'].map(lambda x: u_contents.get(x, 0))
+
+df_train_cnt = pd.concat([match_cols, diff_e, df_match_code, count_cols,  df_new], axis=1)
+df_train_cnt = df_train_cnt.astype('float32')
+df_train_cnt.info()
+
+# +
+'''# onehot_cat & cnt
+count = 0
+for col in col_cat + col_cnt:
+    if count == 0 :
+        onehot_cols = pd.get_dummies(df_test[col], prefix=col)
+        count += 1
+    else:
+        onehot_cols = pd.concat([onehot_cols, pd.get_dummies(df_test[col], prefix=col)], axis=1)'''
+        
+# match_cols
+count = 0
+for col in col_match:
+    df = pd.DataFrame(df_test[col] == df_test['contents_attribute_{}'.format(col[-1])], columns=['match_{}'.format(col[-1])])
+    if count == 0 :
+        match_cols = df
+        count += 1
+    else:
+        match_cols = pd.concat([match_cols, df], axis=1)
+
+        
+# diff_e
+diff_e = pd.DataFrame(abs(df_test['contents_attribute_e'] - df_test['person_prefer_e']), columns=['diff_e'])
+
+col_d = [x for x in col_code if 'd' in x and 'person' in x]
+col_h = [x for x in col_code if 'h' in x and 'person' in x]
+
+# match_code
+match_code = []
+for col in col_d:
+    match_code.append(is_match(col, 'contents_attribute_d', df_test, code_d))
+    
+for col in col_h:
+    match_code.append(is_match(col, 'contents_attribute_h', df_test, code_h))
+
+df_match_code = pd.concat(match_code, axis=1)
+
+df_match_code['match_sum'] = df_match_code.sum(axis=1) # match_ sum
+
+# df_code #### don't use ####
+col_d = col_d_p + ['contents_attribute_d']
+col_h = col_h_p + ['contents_attribute_h']
+
+df_code_test = []
+
+for col in col_d:
+    df_code_test.append(code_d.loc[df_test[col], :].reset_index().add_prefix(col + '_'))
+for col in col_h:
+    df_code_test.append(code_h.loc[df_test[col], :].reset_index().add_prefix(col + '_'))
+df_code_test.append(code_l.loc[df_test['contents_attribute_l'], :].reset_index().add_prefix('contents_attribute_l_'))
+df_code_test = pd.concat(df_code_test, axis=1)
+
+
+# count_cols
+count_cols = pd.DataFrame()
+for col in col_cnt + col_cat + col_code[-2:]: 
+    u = df_train[col].value_counts().to_dict()
+    count_cols[col + '_count'] = df_test[col].map(lambda x: u.get(x, 0))
+    print(col)
+
+for col in df_code_test.columns:
+    u = df_code_train[col].value_counts().to_dict()
+    count_cols[col + '_count'] = df_code_test[col].map(lambda x:u.get(x, 0))
+    print(col)
+
+# df_new
+
+person_features = [c for c in df_train.columns if ('person_a' in c or 'person_p' in c)]
+df_new = pd.DataFrame()
+count = 0
+for col in person_features:
+    if count == 0:
+        df_new['person_new'] = df_test[col].astype(str) + '_'
+        count = 1
+    else:
+        df_new['person_new'] += df_test[col].astype(str) + '_'
+        
+count = 0
+for col in contents_features:
+    if count == 0:
+        df_new['contents_new'] = df_test[col].astype(str) + '_'
+        count = 1
+    else:
+        df_new['contents_new'] += df_test[col].astype(str) + '_'        
+
+df_new['person_new'] = df_new['person_new'].map(lambda x: u_person.get(x, 0))
+df_new['contents_new'] = df_new['contents_new'].map(lambda x: u_contents.get(x, 0))
+
+df_test_cnt = pd.concat([match_cols, diff_e, df_match_code, count_cols,  df_new], axis=1)
+df_test_cnt = df_test_cnt.astype('float32')
+df_test_cnt.info()
+# -
+
+df_code_train = df_code_train.astype('int32')
+df_code_test = df_code_test.astype('int32')
+
+# +
+from keras.layers import Dense, PReLU, BatchNormalization, Dropout, Embedding, Flatten, Input, Concatenate
+from keras.models import Model
+
+col_d = [x for x in col_code if '_d' in x]
+col_h = [x for x in col_code if '_h' in x]
+col_l = ['contents_attribute_l']
+
+d_max = 1258
+h_max = 570
+l_max = 2025
+
+
+def nn_model():
+    inputs = []
+    flatten_layers = []
+    output_dim = 16
+        
+    # code d
+    for d in range(4):
+        input_d = Input(shape=(5, ), dtype='int32')
+        embed_d = Embedding(d_max, output_dim, input_length=5)(input_d)
+        drop_d = Dropout(0.5)(embed_d)
+        flatten_d = Flatten()(drop_d)
+        inputs.append(input_d)
+        flatten_layers.append(flatten_d)
+
+    # code h
+    for h in range(4):
+        input_h = Input(shape=(3, ), dtype='int32')
+        embed_h = Embedding(h_max, output_dim, input_length=3)(input_h)
+        drop_h = Dropout(0.5)(embed_h)
+        flatten_h = Flatten()(drop_h)
+        inputs.append(input_h)
+        flatten_layers.append(flatten_h)
+
+    # code l
+    input_l = Input(shape=(5, ), dtype='int32')
+    embed_l = Embedding(l_max, output_dim, input_length=5)(input_l)
+    drop_l = Dropout(0.5)(embed_l)
+    flatten_l = Flatten()(drop_l)
+    inputs.append(input_l)
+    flatten_layers.append(flatten_l)
+    
+    # df_emb
+    for c in df_train_emb.columns:
+        input_c = Input(shape=(1, ), dtype='int32')
+        num_c = df_train_emb[c].max()
+        embed_c = Embedding(num_c, 4, input_length=1)(input_c)
+        embed_c = Dropout(0.5)(embed_c)
+        flatten_c = Flatten()(embed_c)
+        inputs.append(input_c)
+        flatten_layers.append(flatten_c)
+
+    # df_cnt
+    input_cnt = layers.Input(shape=(X_cnt_train.shape[1],), dtype='float32')
+    inputs.append(input_cnt)
+    flatten_layers.append(input_cnt)
+
+    
+    flatten = Concatenate()(flatten_layers)
+
+    dense = Dense(512, kernel_initializer=keras.initializers.he_normal())(flatten)
+    dense = PReLU()(dense)
+    dense = BatchNormalization()(dense)
+    dense = Dropout(0.5)(dense)
+
+    dense = Dense(64, kernel_initializer=keras.initializers.he_normal())(dense)
+    dense = PReLU()(dense)
+    dense = BatchNormalization()(dense)
+    dense = Dropout(0.5)(dense)
+
+    outputs = Dense(1, kernel_initializer=keras.initializers.he_normal(), activation='sigmoid')(dense)
+
+    model = Model(inputs=inputs, outputs=outputs)
+    model.compile(optimizer='adam', loss="binary_crossentropy", metrics=['accuracy'])
+
+    return model
+
+
+# -
+
+
+
+X_code_train = df_code_train.values
+X_code_test = df_code_test.values
+
+# +
+NFOLDS = 5
+kfold = StratifiedKFold(n_splits=NFOLDS, shuffle=True, random_state=112)
+
+kf = kfold.split(X_cnt_train, y)
+
+early = keras.callbacks.EarlyStopping(patience=5, restore_best_weights=True)
+
+(t, v) = next(kf)
+
+y_tr = y[t]
+y_val = y[v]
+
+x_tr = []
+x_val = []
+
+# code d 
+for d in range(4):
+    s = 5 * d
+    e = s + 5
+    x_tr.append(X_code_train[t, s:e])
+    x_val.append(X_code_train[v, s:e])
+
+# code h
+for h in range(4):
+    s = 20 + h * 3
+    e = s + 3
+    x_tr.append(X_code_train[t, s:e])
+    x_val.append(X_code_train[v, s:e])
+    
+# code l
+x_tr.append(X_code_train[t, 32:])
+x_val.append(X_code_train[v, 32:])
+
+# enb
+for i in range(X_emb_train.shape[1]):
+    x_tr.append(X_emb_train[t, i].reshape(-1, 1))
+    x_val.append(X_emb_train[v, i].reshape(-1, 1))
+
+# cnt
+x_tr.append(X_cnt_train[t])
+x_val.append(X_cnt_train[v])
+
+model = nn_model()
+
+history = model.fit(
+    x = x_tr,
+    y = y_tr,
+    validation_data=[x_val, y_val],
+    callbacks=[early],
+    batch_size=512,
+    epochs=100
+)
+
+# -
+
+
+
+# +
+x_list = []
+
+# code d 
+for d in range(4):
+    s = 5 * d
+    e = s + 5
+    x_list.append(X_code_train[:, s:e])
+
+# code h
+for h in range(4):
+    s = 20 + h * 3
+    e = s + 3
+    x_list.append(X_code_train[:, s:e])
+    
+# code l
+x_list.append(X_code_train[:, 32:])
+
+# enb
+for i in range(X_emb_train.shape[1]):
+    x_list.append(X_emb_train[:, i].reshape(-1, 1))
+
+# cnt
+x_list.append(X_cnt_train)
+
+pred = np.squeeze(model.predict(x_list))
+
+for i in range(30, 50):
+    th = i/100
+    p = threshold(pred, th=th)
+    print(th, f1_score(y, p), (y == p).sum()/len(y))
+    
+#7216 64 64
+#7211 128 16(l)
+#7175 64 16(l)
+#7224 64 16
+
+
+#7096 16 10 6415
+#7140 32 10 6404
+#7222 64 10 6416
+#7328 128 10 6411 overfit
+#7461 256 10 6402 overfit
+#7604 512 10 overfit
+
+# +
+NFOLDS = 5
+kfold = StratifiedKFold(n_splits=NFOLDS, shuffle=True, random_state=112)
+num_seeds = 1
+early = keras.callbacks.EarlyStopping(patience=5, restore_best_weights=True)
+cv_train = np.zeros(len(df_train))
+cv_pred = np.zeros(len(df_test))
+
+x_test_list = []
+# code d 
+for d in range(4):
+    s = 5 * d
+    e = s + 5
+    x_test_list.append(X_code_test[:, s:e])
+# code h
+for h in range(4):
+    s = 20 + h * 3
+    e = s + 3
+    x_test_list.append(X_code_test[:, s:e])
+# code l
+x_test_list.append(X_code_test[:, 32:])
+# enb
+for i in range(X_emb_train.shape[1]):
+    x_test_list.append(X_emb_test[:, i].reshape(-1, 1))
+# cnt
+x_test_list.append(X_cnt_test)
+
+for s in range(num_seeds):
+    
+    np.random.seed(s)
+
+    for (t, v) in kfold.split(X_code_train, y):
+
+        y_tr = y[t]
+        y_val = y[v]
+
+        x_tr = []
+        x_val = []
+
+        # code d 
+        for d in range(4):
+            s = 5 * d
+            e = s + 5
+            x_tr.append(X_code_train[t, s:e])
+            x_val.append(X_code_train[v, s:e])
+
+        # code h
+        for h in range(4):
+            s = 20 + h * 3
+            e = s + 3
+            x_tr.append(X_code_train[t, s:e])
+            x_val.append(X_code_train[v, s:e])
+
+        # code l
+        x_tr.append(X_code_train[t, 32:])
+        x_val.append(X_code_train[v, 32:])
+
+        # enb
+        for i in range(X_emb_train.shape[1]):
+            x_tr.append(X_emb_train[t, i].reshape(-1, 1))
+            x_val.append(X_emb_train[v, i].reshape(-1, 1))
+
+        # cnt
+        x_tr.append(X_cnt_train[t])
+        x_val.append(X_cnt_train[v])
+
+        model = nn_model()
+
+        history = model.fit(
+            x = x_tr,
+            y = y_tr,
+            validation_data=[x_val, y_val],
+            callbacks=[early],
+            batch_size=512,
+            verbose=0,
+            epochs=100
+        )
+
+        
+        val_pred = np.squeeze(model.predict(x_val))
+        cv_train[v] += val_pred
+        print("accuracy: {}".format(f1_score(y[v], threshold(val_pred, th=0.5))))
+
+        cv_pred += np.squeeze(model.predict(x_test_list))
+
+    print("-----------------")
+    print("seed{}_mse: {}".format(s, f1_score(y, threshold(cv_train / (s + 1), th=0.5))))
+    print("-----------------")
+
+# -
+
+s
+
+for i in range(30, 50):
+    th = i/100
+    print(th, f1_score(y, threshold(cv_train, th=th)))
+
+cv_pred/5
+
+df_colab_train = pd.read_csv('colab_final_cv_train.csv', index_col='id')
+df_colab_pred = pd.read_csv('colab_final_cv_pred.csv', index_col='id')
+
+colab_train = np.squeeze(df_colab_train.values)
+colab_pred = np.squeeze(df_colab_pred.values)
+colab_train
+
+# +
+en_train = cv_train * 0.5 + (colab_train / 6) * 0.5
+
+for i in range(30, 50):
+    th = i/100
+    p = threshold(en_train, th=th)
+    print(th, f1_score(y, p), (y == p).sum()/len(y))
+# -
+
+pd.DataFrame((cv_pred/5), columns=['target']).describe()
+
+
+(df_colab_pred/6).describe()
+
+en_pred = (cv_pred / 5) * 0.5 + (colab_pred / 6) * 0.5
+df_en_pred = pd.DataFrame(threshold(en_pred, th=0.36), columns=['target'])
+df_en_pred.index.name = 'id'
+df_en_pred.to_csv('en_nn_lgb_36.csv')

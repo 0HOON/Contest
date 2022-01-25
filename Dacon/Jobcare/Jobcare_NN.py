@@ -644,7 +644,7 @@ df_code_train = pd.concat(df_code_train, axis=1)
 
 # count_cols
 count_cols = pd.DataFrame()
-for col in col_cnt + col_cat + col_code[-2:]: 
+for col in col_code[-2:]: 
     u = df_train[col].value_counts().to_dict()
     count_cols[col + '_count'] = df_train[col].map(lambda x: u.get(x, 0))
     print(col)
@@ -680,7 +680,8 @@ u_contents = df_new['contents_new'].value_counts().to_dict()
 df_new['person_new'] = df_new['person_new'].map(lambda x: u_person.get(x, 0))
 df_new['contents_new'] = df_new['contents_new'].map(lambda x: u_contents.get(x, 0))
 
-df_train_cnt = pd.concat([match_cols, diff_e, df_match_code, count_cols,  df_new], axis=1)
+#df_train_cnt = pd.concat([match_cols, diff_e, df_match_code, count_cols,  df_new], axis=1)
+df_train_cnt = pd.concat([count_cols,  df_new], axis=1)
 df_train_cnt = df_train_cnt.astype('float32')
 df_train_cnt.info()
 
@@ -739,7 +740,7 @@ df_code_test = pd.concat(df_code_test, axis=1)
 
 # count_cols
 count_cols = pd.DataFrame()
-for col in col_cnt + col_cat + col_code[-2:]: 
+for col in  col_code[-2:]: 
     u = df_train[col].value_counts().to_dict()
     count_cols[col + '_count'] = df_test[col].map(lambda x: u.get(x, 0))
     print(col)
@@ -772,9 +773,27 @@ for col in contents_features:
 df_new['person_new'] = df_new['person_new'].map(lambda x: u_person.get(x, 0))
 df_new['contents_new'] = df_new['contents_new'].map(lambda x: u_contents.get(x, 0))
 
-df_test_cnt = pd.concat([match_cols, diff_e, df_match_code, count_cols,  df_new], axis=1)
+#df_test_cnt = pd.concat([match_cols, diff_e, df_match_code, count_cols,  df_new], axis=1)
+df_test_cnt = pd.concat([count_cols,  df_new], axis=1)
 df_test_cnt = df_test_cnt.astype('float32')
 df_test_cnt.info()
+# -
+
+for col in df_train_cnt.columns: # min max scale
+    col_max = df_train_cnt[col].max()
+    col_min = df_train_cnt[col].min()
+    df_train_cnt[col] = (df_train_cnt[col] - col_min) / (col_max - col_min)
+    df_test_cnt[col] = (df_test_cnt[col] - col_min) / (col_max - col_min)
+
+# +
+df_train_emb = df_train.drop(drop_features + col_bin + col_code + ['target'], axis=1).astype('int32')
+df_test_emb = df_test.drop(drop_features + col_bin + col_code, axis=1).astype('int32')
+
+y = df_train['target'].copy()
+X_cnt_train = df_train_cnt.values
+X_cnt_test = df_test_cnt.values
+X_emb_train = df_train_emb.values
+X_emb_test = df_test_emb.values
 # -
 
 df_code_train = df_code_train.astype('int32')
@@ -851,19 +870,16 @@ def nn_model():
     dense = PReLU()(dense)
     dense = BatchNormalization()(dense)
     dense = Dropout(0.5)(dense)
-
+    
     outputs = Dense(1, kernel_initializer=keras.initializers.he_normal(), activation='sigmoid')(dense)
 
     model = Model(inputs=inputs, outputs=outputs)
-    model.compile(optimizer='adam', loss="binary_crossentropy", metrics=['accuracy'])
+    model.compile('adam', loss="binary_crossentropy", metrics=['accuracy'])
 
     return model
 
 
 # -
-
-
-
 X_code_train = df_code_train.values
 X_code_test = df_code_test.values
 
@@ -921,8 +937,6 @@ history = model.fit(
     epochs=100
 )
 
-# -
-
 
 
 # +
@@ -969,6 +983,9 @@ for i in range(30, 50):
 #7328 128 10 6411 overfit
 #7461 256 10 6402 overfit
 #7604 512 10 overfit
+# -
+
+# ### K-Fold cross validation
 
 # +
 NFOLDS = 5
@@ -1094,3 +1111,294 @@ en_pred = (cv_pred / 5) * 0.5 + (colab_pred / 6) * 0.5
 df_en_pred = pd.DataFrame(threshold(en_pred, th=0.36), columns=['target'])
 df_en_pred.index.name = 'id'
 df_en_pred.to_csv('en_nn_lgb_36.csv')
+
+# ## TabNet
+
+import torch
+import torch.nn as nn
+from pytorch_tabnet.tab_model import TabNetClassifier
+
+# +
+'''# onehot_cat & cnt
+count = 0
+for col in col_cat + col_cnt:
+    if count == 0 :
+        onehot_cols = pd.get_dummies(df_train[col], prefix=col)
+        count += 1
+    else:
+        onehot_cols = pd.concat([onehot_cols, pd.get_dummies(df_train[col], prefix=col)], axis=1)'''
+        
+# match_cols
+count = 0
+for col in col_match:
+    df = pd.DataFrame(df_train[col] == df_train['contents_attribute_{}'.format(col[-1])], columns=['match_{}'.format(col[-1])])
+    if count == 0 :
+        match_cols = df
+        count += 1
+    else:
+        match_cols = pd.concat([match_cols, df], axis=1)
+        
+# diff_e 
+diff_e = pd.DataFrame(abs(df_train['contents_attribute_e'] - df_train['person_prefer_e']), columns=['diff_e'])
+
+# match_code
+col_d_p = [x for x in col_code if 'd' in x and 'person' in x]
+col_h_p = [x for x in col_code if 'h' in x and 'person' in x]
+
+match_code = []
+for col in col_d_p:
+    match_code.append(is_match(col, 'contents_attribute_d', df_train, code_d))
+    
+for col in col_h_p:
+    match_code.append(is_match(col, 'contents_attribute_h', df_train, code_h))
+
+
+df_match_code = pd.concat(match_code, axis=1)
+
+df_match_code['match_sum'] = df_match_code.sum(axis=1) # match_ sum
+
+# df_code   ####don't use####
+col_d = col_d_p + ['contents_attribute_d']
+col_h = col_h_p + ['contents_attribute_h']
+
+df_code_train = []
+
+for col in col_d:
+    df_code_train.append(code_d.loc[df_train[col], :].reset_index().add_prefix(col + '_'))
+    
+for col in col_h:
+    df_code_train.append(code_h.loc[df_train[col], :].reset_index().add_prefix(col + '_'))
+    
+df_code_train.append(code_l.loc[df_train['contents_attribute_l'], :].reset_index().add_prefix('contents_attribute_l_'))
+
+df_code_train = pd.concat(df_code_train, axis=1)
+
+# count_cols
+count_cols = pd.DataFrame()
+for col in col_cnt + col_cat + col_code[-2:]: 
+    u = df_train[col].value_counts().to_dict()
+    count_cols[col + '_count'] = df_train[col].map(lambda x: u.get(x, 0))
+    print(col)
+
+for col in df_code_train.columns:
+    u = df_code_train[col].value_counts().to_dict()
+    count_cols[col + '_count'] = df_code_train[col].map(lambda x:u.get(x, 0))
+    print(col)
+
+# df_new
+person_features = [c for c in df_train.columns if ('person_a' in c or 'person_p' in c)]
+contents_features = [c for c in df_train.columns if 'contents_a' in c]
+df_new = pd.DataFrame()
+count = 0
+for col in person_features:
+    if count == 0:
+        df_new['person_new'] = df_train[col].astype(str) + '_'
+        count = 1
+    else:
+        df_new['person_new'] += df_train[col].astype(str) + '_'
+
+count = 0
+for col in contents_features:
+    if count == 0:
+        df_new['contents_new'] = df_train[col].astype(str) + '_'
+        count = 1
+    else:
+        df_new['contents_new'] += df_train[col].astype(str) + '_'        
+
+u_person = df_new['person_new'].value_counts().to_dict()
+u_contents = df_new['contents_new'].value_counts().to_dict()
+
+df_new['person_new'] = df_new['person_new'].map(lambda x: u_person.get(x, 0))
+df_new['contents_new'] = df_new['contents_new'].map(lambda x: u_contents.get(x, 0))
+
+#df_train_cnt = pd.concat([match_cols, diff_e, df_match_code, count_cols,  df_new], axis=1)
+df_train_cnt = pd.concat([count_cols,  df_new], axis=1)
+df_train_cnt = df_train_cnt.astype('float32')
+df_train_cnt.info()
+
+# +
+'''# onehot_cat & cnt
+count = 0
+for col in col_cat + col_cnt:
+    if count == 0 :
+        onehot_cols = pd.get_dummies(df_test[col], prefix=col)
+        count += 1
+    else:
+        onehot_cols = pd.concat([onehot_cols, pd.get_dummies(df_test[col], prefix=col)], axis=1)'''
+        
+# match_cols
+count = 0
+for col in col_match:
+    df = pd.DataFrame(df_test[col] == df_test['contents_attribute_{}'.format(col[-1])], columns=['match_{}'.format(col[-1])])
+    if count == 0 :
+        match_cols = df
+        count += 1
+    else:
+        match_cols = pd.concat([match_cols, df], axis=1)
+
+        
+# diff_e
+diff_e = pd.DataFrame(abs(df_test['contents_attribute_e'] - df_test['person_prefer_e']), columns=['diff_e'])
+
+col_d = [x for x in col_code if 'd' in x and 'person' in x]
+col_h = [x for x in col_code if 'h' in x and 'person' in x]
+
+# match_code
+match_code = []
+for col in col_d:
+    match_code.append(is_match(col, 'contents_attribute_d', df_test, code_d))
+    
+for col in col_h:
+    match_code.append(is_match(col, 'contents_attribute_h', df_test, code_h))
+
+df_match_code = pd.concat(match_code, axis=1)
+
+df_match_code['match_sum'] = df_match_code.sum(axis=1) # match_ sum
+
+# df_code #### don't use ####
+col_d = col_d_p + ['contents_attribute_d']
+col_h = col_h_p + ['contents_attribute_h']
+
+df_code_test = []
+
+for col in col_d:
+    df_code_test.append(code_d.loc[df_test[col], :].reset_index().add_prefix(col + '_'))
+for col in col_h:
+    df_code_test.append(code_h.loc[df_test[col], :].reset_index().add_prefix(col + '_'))
+df_code_test.append(code_l.loc[df_test['contents_attribute_l'], :].reset_index().add_prefix('contents_attribute_l_'))
+df_code_test = pd.concat(df_code_test, axis=1)
+
+
+# count_cols
+count_cols = pd.DataFrame()
+for col in col_cnt + col_cat + col_code[-2:]: 
+    u = df_train[col].value_counts().to_dict()
+    count_cols[col + '_count'] = df_test[col].map(lambda x: u.get(x, 0))
+    print(col)
+
+for col in df_code_test.columns:
+    u = df_code_train[col].value_counts().to_dict()
+    count_cols[col + '_count'] = df_code_test[col].map(lambda x:u.get(x, 0))
+    print(col)
+
+# df_new
+
+person_features = [c for c in df_train.columns if ('person_a' in c or 'person_p' in c)]
+df_new = pd.DataFrame()
+count = 0
+for col in person_features:
+    if count == 0:
+        df_new['person_new'] = df_test[col].astype(str) + '_'
+        count = 1
+    else:
+        df_new['person_new'] += df_test[col].astype(str) + '_'
+        
+count = 0
+for col in contents_features:
+    if count == 0:
+        df_new['contents_new'] = df_test[col].astype(str) + '_'
+        count = 1
+    else:
+        df_new['contents_new'] += df_test[col].astype(str) + '_'        
+
+df_new['person_new'] = df_new['person_new'].map(lambda x: u_person.get(x, 0))
+df_new['contents_new'] = df_new['contents_new'].map(lambda x: u_contents.get(x, 0))
+
+#df_test_cnt = pd.concat([match_cols, diff_e, df_match_code, count_cols,  df_new], axis=1)
+df_test_cnt = pd.concat([count_cols,  df_new], axis=1)
+df_test_cnt = df_test_cnt.astype('float32')
+df_test_cnt.info()
+# -
+
+for col in df_train_cnt.columns: # min max scale
+    col_max = df_train_cnt[col].max()
+    col_min = df_train_cnt[col].min()
+    df_train_cnt[col] = (df_train_cnt[col] - col_min) / (col_max - col_min)
+    df_test_cnt[col] = (df_test_cnt[col] - col_min) / (col_max - col_min)
+
+# +
+df_train_emb = df_train.drop(drop_features + col_bin + col_code + ['target'], axis=1).astype('int32')
+df_test_emb = df_test.drop(drop_features + col_bin + col_code, axis=1).astype('int32')
+
+df_code_train = df_code_train.astype('int32')
+df_code_test = df_code_test.astype('int32')
+
+df_train_all = pd.concat([df_train_emb, df_code_train, df_train_cnt], axis=1).astype(float)
+df_test_all = pd.concat([df_test_emb, df_code_test, df_test_cnt], axis=1).astype(float)
+
+y = df_train['target'].copy().astype(float)
+X_train = df_train_all.values
+X_test = df_test_all.values
+# -
+
+df_code_train
+
+code_dim_list = df_code_train.max().to_list()
+for i, n in enumerate(code_dim_list):
+    if (n > 300 and n < 400):
+        code_dim_list[i] = 314
+    if (n > 500 and n < 600):
+        code_dim_list[i] = 570
+    if (n > 2000):
+        code_dim_list[i] = 2025       
+
+cat_idxs = [i for i, f in enumerate(df_train_all.columns) if f not in df_train_cnt.columns]
+cat_dims = np.concatenate([df_train_emb.max().to_list(), code_dim_list]) + 1
+
+clf = TabNetClassifier(cat_idxs=cat_idxs,
+                       cat_dims=list(cat_dims),
+                       cat_emb_dim=16,
+                       optimizer_fn=torch.optim.Adam,
+                       optimizer_params=dict(lr=1e-2),
+                       scheduler_params={"step_size":50,
+                                         "gamma":0.9},
+                       scheduler_fn=torch.optim.lr_scheduler.StepLR,
+                       mask_type='sparsemax' # "sparsemax", entmax
+                      )
+
+import os
+os.environ['CUDA_LAUNCH_BLOCKING'] = "1"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+
+# +
+NFOLDS = 5
+kfold = StratifiedKFold(n_splits=NFOLDS, shuffle=True, random_state=112)
+
+kf = kfold.split(X_train, y)
+max_epochs = 15
+
+
+(t, v) = next(kf)
+
+y_tr = y[t]
+y_val = y[v]
+
+x_tr = X_train[t]
+x_val = X_train[v]
+
+clf.fit(
+    X_train=x_tr, y_train=y_tr,
+    eval_set=[(x_tr, y_tr), (x_val, y_val)],
+    eval_name=['train', 'valid'],
+    eval_metric=['auc'],
+    max_epochs=max_epochs , patience=20,
+    batch_size=1024, virtual_batch_size=128,
+    num_workers=0,
+    weights=1,
+    drop_last=False,
+)
+# -
+
+pred = clf.predict_proba(X_test)[:, 1]
+
+pred_train = clf.predict_proba(X_train)[:, 1]
+
+for i in range(30,50):
+    th = i/100
+    print(th, f1_score(y, threshold(pred_train, th=th)))
+
+df_pred = pd.DataFrame(threshold(pred, 0.35), columns=['target'])
+df_pred.index.name = 'id'
+df_pred.to_csv('TabNet.csv')
+
+df_pred.describe()

@@ -1078,6 +1078,13 @@ for s in range(num_seeds):
 
 # -
 
+df_nn_pred = pd.DataFrame(cv_pred, columns=['target'])
+df_nn_pred.index.name = 'id'
+df_nn_train = pd.DataFrame(cv_train, columns=['target'])
+df_nn_train.index.name = 'id'
+
+# ## 여기
+
 s
 
 for i in range(30, 50):
@@ -1117,6 +1124,7 @@ df_en_pred.to_csv('en_nn_lgb_36.csv')
 import torch
 import torch.nn as nn
 from pytorch_tabnet.tab_model import TabNetClassifier
+from pytorch_tabnet.pretraining import TabNetPretrainer
 
 # +
 '''# onehot_cat & cnt
@@ -1316,6 +1324,12 @@ for col in df_train_cnt.columns: # min max scale
     df_train_cnt[col] = (df_train_cnt[col] - col_min) / (col_max - col_min)
     df_test_cnt[col] = (df_test_cnt[col] - col_min) / (col_max - col_min)
 
+for col in df_train_cnt.columns:
+    col_m = df_train_cnt[col].mean()
+    col_s = df_train_cnt[col].std()
+    df_train_cnt[col] = (df_train_cnt[col] - col_m) / col_s
+    df_test_cnt[col] = (df_test_cnt[col] - col_m) / col_s
+
 # +
 df_train_emb = df_train.drop(drop_features + col_bin + col_code + ['target'], axis=1).astype('int32')
 df_test_emb = df_test.drop(drop_features + col_bin + col_code, axis=1).astype('int32')
@@ -1331,8 +1345,6 @@ X_train = df_train_all.values
 X_test = df_test_all.values
 # -
 
-df_code_train
-
 code_dim_list = df_code_train.max().to_list()
 for i, n in enumerate(code_dim_list):
     if (n > 300 and n < 400):
@@ -1343,11 +1355,30 @@ for i, n in enumerate(code_dim_list):
         code_dim_list[i] = 2025       
 
 cat_idxs = [i for i, f in enumerate(df_train_all.columns) if f not in df_train_cnt.columns]
-cat_dims = np.concatenate([df_train_emb.max().to_list(), code_dim_list]) + 1
+cat_dims = list(np.concatenate([df_train_emb.max().to_list(), code_dim_list]) + 1)
 
-clf = TabNetClassifier(cat_idxs=cat_idxs,
-                       cat_dims=list(cat_dims),
-                       cat_emb_dim=16,
+# +
+cat_emb_dims = np.zeros(len(cat_dims))
+for i, d in enumerate(cat_dims):
+    if d < 100:
+        cat_emb_dims[i] = 4
+        continue
+
+    if d > 100:
+        cat_emb_dims[i] = 16
+        continue
+    
+        
+cat_emb_dims = list(cat_emb_dims.astype(int))
+
+# +
+clf = TabNetClassifier(n_d=16, n_a=16,
+                       n_steps=3,
+                       n_independent=2,
+                       n_shared=4,
+                       cat_idxs=cat_idxs,
+                       cat_dims=cat_dims,
+                       cat_emb_dim=cat_emb_dims,
                        optimizer_fn=torch.optim.Adam,
                        optimizer_params=dict(lr=1e-2),
                        scheduler_params={"step_size":50,
@@ -1355,6 +1386,19 @@ clf = TabNetClassifier(cat_idxs=cat_idxs,
                        scheduler_fn=torch.optim.lr_scheduler.StepLR,
                        mask_type='sparsemax' # "sparsemax", entmax
                       )
+
+unsupervised_model = TabNetPretrainer(n_d=16, n_a=16,
+                       cat_idxs=cat_idxs,
+                       cat_dims=cat_dims,
+                       cat_emb_dim=cat_emb_dims,
+                       optimizer_fn=torch.optim.Adam,
+                       optimizer_params=dict(lr=1e-2),
+                       scheduler_params={"step_size":50,
+                                         "gamma":0.9},
+                       scheduler_fn=torch.optim.lr_scheduler.StepLR,
+                       mask_type='sparsemax' # "sparsemax", entmax
+                      )
+# -
 
 import os
 os.environ['CUDA_LAUNCH_BLOCKING'] = "1"
@@ -1365,7 +1409,7 @@ NFOLDS = 5
 kfold = StratifiedKFold(n_splits=NFOLDS, shuffle=True, random_state=112)
 
 kf = kfold.split(X_train, y)
-max_epochs = 15
+max_epochs = 1000
 
 
 (t, v) = next(kf)
@@ -1376,29 +1420,170 @@ y_val = y[v]
 x_tr = X_train[t]
 x_val = X_train[v]
 
+unsupervised_model.fit(
+    X_train=x_tr[:50000],
+    eval_set=[x_val[:5000]],
+    pretraining_ratio=0.8,
+    max_epochs=1000,
+    patience=10
+)
+
 clf.fit(
     X_train=x_tr, y_train=y_tr,
     eval_set=[(x_tr, y_tr), (x_val, y_val)],
     eval_name=['train', 'valid'],
     eval_metric=['auc'],
-    max_epochs=max_epochs , patience=20,
-    batch_size=1024, virtual_batch_size=128,
+    max_epochs=max_epochs , patience=5,
+    batch_size=2048, virtual_batch_size=128,
     num_workers=0,
     weights=1,
     drop_last=False,
+    from_unsupervised=unsupervised_model
 )
 # -
 
-pred = clf.predict_proba(X_test)[:, 1]
-
 pred_train = clf.predict_proba(X_train)[:, 1]
 
+# +
 for i in range(30,50):
     th = i/100
     print(th, f1_score(y, threshold(pred_train, th=th)))
+# 16 7056
+# 8 7048
+# 10 7028
+# 대, 중, 소 제외 8 7001
 
-df_pred = pd.DataFrame(threshold(pred, 0.35), columns=['target'])
-df_pred.index.name = 'id'
-df_pred.to_csv('TabNet.csv')
+# emb_dim 조절-64 7002
+# n_d,a 64, emb_dim 16 - 7084
+# n_d,a 32, emb_dim 16 - 7063 6739
+# n_d,a 16, emb_dim 16 - 7086 6744
+# n_d,a 16, emb_dim 16 batch 2048 128 - 7104 6724
+# n_d,a 16, emb_dim 16 batch 4096 128 - 7101 6656
 
-df_pred.describe()
+# n_d,a 16, emb_dim 16 batch 2048 256 - 7023 6678
+# n_d,a 16, emb_dim 16 batch 2048 64 - 7121 6727
+# n_d,a 16, emb_dim 16 batch 2048 32 pretrained - 6962 6705
+# n_d,a 16, emb_dim 16 batch 2048 64 pretrained - 7016 6769
+
+# n_d,a 16, emb_dim 16 batch 2048 64
+# n_steps 5 - 7121 6727
+# n_steps 10 - nope
+
+# n_independent 4 - nope
+# step 3 n_shared 4 - 7057 6770
+#
+# -
+
+p = pred_train * 0.5 + colab_train/12
+for i in range(30,50):
+    th = i/100
+    print(th, f1_score(y, threshold(p, th=th)))
+
+df_colab_pred
+
+pred = clf.predict_proba(X_test)[:, 1]
+en_pred = pred * 0.5 + colab_pred /12
+df_en_pred = pd.DataFrame(threshold(en_pred, 0.38), columns=['target'])
+df_en_pred.index.name = 'id'
+df_en_pred.describe()
+
+df_en_pred.to_csv('en_tab_pre.csv')
+
+# ### Kfold
+
+# +
+NFOLDS = 5
+kfold = StratifiedKFold(n_splits=NFOLDS, shuffle=True, random_state=112)
+num_seeds = 1
+
+cv_train = np.zeros(len(df_train))
+cv_pred = np.zeros(len(df_test))
+
+
+for s in range(num_seeds):
+    
+    np.random.seed(s)
+
+    for (t, v) in kfold.split(X_train, y):
+
+        y_tr = y[t]
+        y_val = y[v]
+
+        x_tr = X_train[t]
+        x_val = X_train[v]
+        
+        clf = TabNetClassifier(cat_idxs=cat_idxs,
+                       cat_dims=list(cat_dims),
+                       cat_emb_dim=10,
+                       optimizer_fn=torch.optim.Adam,
+                       optimizer_params=dict(lr=1e-2),
+                       scheduler_params={"step_size":50,
+                                         "gamma":0.9},
+                       scheduler_fn=torch.optim.lr_scheduler.StepLR,
+                       mask_type='sparsemax' # "sparsemax", entmax
+                      )
+        
+        clf.fit(
+            X_train=x_tr, y_train=y_tr,
+            eval_set=[(x_tr, y_tr), (x_val, y_val)],
+            eval_name=['train', 'valid'],
+            eval_metric=['auc'],
+            max_epochs=max_epochs , patience=5,
+            batch_size=1024, virtual_batch_size=128,
+            num_workers=0,
+            weights=1,
+            drop_last=False,
+        )
+
+        
+        val_pred = np.squeeze(clf.predict_proba(x_val)[:, 1])
+        cv_train[v] += val_pred
+        print("f1: {}".format(f1_score(y[v], threshold(val_pred, th=0.5))))
+
+        cv_pred += np.squeeze(clf.predict_proba(X_test)[:, 1])
+
+    print("-----------------")
+    print("seed{}_mse: {}".format(s, f1_score(y, threshold(cv_train / (s + 1), th=0.5))))
+    print("-----------------")
+
+# -
+
+df_tab_pred = pd.DataFrame(cv_pred, columns=['target'])
+df_tab_pred.index.name = 'id'
+df_tab_train = pd.DataFrame(cv_train, columns=['target'])
+df_tab_train.index.name = 'id'
+
+a = np.squeeze(df_tab_train.values)
+
+df_tab_train.describe()
+
+for i in range(30,60):
+    th = i/100
+    p = threshold(a, th=th)
+    print(th, f1_score(y, p), (y == p).sum()/len(y))
+
+df_colab_train = pd.read_csv('colab_final_cv_train.csv', index_col='id')
+df_colab_pred = pd.read_csv('colab_final_cv_pred.csv', index_col='id')
+
+colab_train = np.squeeze(df_colab_train.values)
+colab_pred = np.squeeze(df_colab_pred.values)
+colab_train
+
+df_colab_train.max()
+
+t = np.squeeze(df_tab_train.values) * 0.5 + colab_train/6 * 0.5
+for i in range(30,60):
+    th = i/100
+    p = threshold(t, th=th)
+    print(th, f1_score(y, p), (y == p).sum()/len(y))
+
+# +
+explain_matrix, masks = clf.explain(X_test)
+
+fig, axs = plt.subplots(1, 3, figsize=(20,20))
+for i in range(3):
+    axs[i].imshow(masks[i][:50])
+    axs[i].set_title(f"mask {i}")
+# -
+
+len(explain_matrix)

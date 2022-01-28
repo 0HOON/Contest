@@ -486,8 +486,8 @@ for col in contents_features:
     else:
         df_new['contents_new'] += df_test[col].astype(str) + '_'        
 
-df_new['person_new'] = df_new['person_new'].map(lambda x: u_person.get(x, 0))
-df_new['contents_new'] = df_new['contents_new'].map(lambda x: u_contents.get(x, 0))
+df_new['person_new'] = df_new['person_new'].map(lambda x: u_person.get(x, 1))
+df_new['contents_new'] = df_new['contents_new'].map(lambda x: u_contents.get(x, 1))
 
 df_test_onehot = df_test.drop(col_cat + col_cnt + drop_features + col_bin + col_code[:-2],  axis=1)
 df_test_onehot = pd.concat([df_test_onehot, onehot_cols, match_cols, diff_e, df_match_code, df_code_test, count_cols, df_new], axis=1)
@@ -502,7 +502,7 @@ len(not_imp_fea)
 df_train_onehot.drop(not_imp_fea, axis=1, inplace=True)
 df_test_onehot.drop(not_imp_fea, axis=1, inplace=True)
 
-y = df_train_onehot.pop('target')
+#y = df_train_onehot.pop('target')
 X = ssp.csr_matrix(df_train_onehot.values)
 X_test = ssp.csr_matrix(df_test_onehot.values)
 
@@ -556,9 +556,9 @@ print('best score: {}'.format(bst.best_score))
 # 0.701287
 # -
 
-pred = bst.predict(X)
+pred = bst.predict(X_val)
 for i in range(30, 50):
-    print(i/100, f1_score(y, threshold(pred, th=i/100)))
+    print(i/100, f1_score(y_val, threshold(pred, th=i/100)))
 #0.4 0.7271 num_leaves 31 max_depth -1
 
 df_fi = pd.DataFrame(bst.feature_importance(), columns=['importance'])
@@ -577,7 +577,7 @@ final_cv_pred = np.zeros(len(df_test))
 
 begin_time = time()
 
-for s in range(6):
+for s in range(1):
 
     cv_train = np.zeros(len(df_train))
     cv_pred = np.zeros(len(df_test))
@@ -628,15 +628,15 @@ for s in range(6):
 # -
 df_final_pred = pd.DataFrame(final_cv_pred, columns=['target'])
 df_final_pred.index.name = 'id'
-df_final_pred.to_csv('th_5_l_test.csv')
+df_final_pred.to_csv('lgb_cv_pred.csv')
 df_final_train = pd.DataFrame(final_cv_train, columns=['target'])
 df_final_train.index.name = 'id'
-df_final_train.to_csv('th_5_l_train.csv')
+df_final_train.to_csv('lgb_cv_train.csv')
 
 for i in range(30, 50):
     th = i/100
     
-    print(i, f1_score(y, np.squeeze(threshold(final_cv_train/6, th=th))))
+    print(i, f1_score(y, np.squeeze(threshold(final_cv_train, th=th))))
 
 final_cv_pred
 

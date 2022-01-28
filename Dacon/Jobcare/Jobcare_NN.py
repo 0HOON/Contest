@@ -742,12 +742,12 @@ df_code_test = pd.concat(df_code_test, axis=1)
 count_cols = pd.DataFrame()
 for col in  col_code[-2:]: 
     u = df_train[col].value_counts().to_dict()
-    count_cols[col + '_count'] = df_test[col].map(lambda x: u.get(x, 0))
+    count_cols[col + '_count'] = df_test[col].map(lambda x: u.get(x, 1))
     print(col)
 
 for col in df_code_test.columns:
     u = df_code_train[col].value_counts().to_dict()
-    count_cols[col + '_count'] = df_code_test[col].map(lambda x:u.get(x, 0))
+    count_cols[col + '_count'] = df_code_test[col].map(lambda x:u.get(x, 1))
     print(col)
 
 # df_new
@@ -939,11 +939,18 @@ history = model.fit(
     y = y_tr,
     validation_data=[x_val, y_val],
     callbacks=[early],
-    batch_size=512,
+    batch_size=1024,
     epochs=100
 )
 
+# -
 
+
+train_p = np.squeeze(model.predict(x_val))
+for i in range(30,50):
+    th = i/100
+    p = threshold(train_p, th=th)
+    print(th, f1_score(y_val, p), (y_val == p).sum()/len(y_val))
 
 # +
 x_list = []
@@ -1028,12 +1035,12 @@ tab_test = np.squeeze(df_tab_test.values)
 tab_train
 
 # +
-en = tab_train * 0.5 + pred * 0.5
+en = colab_train[v] * 0.5 + train_p* 0.5
 
 for i in range(30,60):
     th = i/100
     p = threshold(en, th=th)
-    print(th, f1_score(y, p), (y == p).sum()/len(y))
+    print(th, f1_score(y_val, p), (y_val == p).sum()/len(y_val))
 # -
 
 en_pred = tab_test * 0.5 + colab_test * 0.5
@@ -1074,9 +1081,9 @@ for i in range(X_emb_train.shape[1]):
 # cnt
 x_test_list.append(X_cnt_test)
 
-for s in range(num_seeds):
+for seed in range(num_seeds):
     
-    np.random.seed(s)
+    np.random.seed(seed)
 
     for (t, v) in kfold.split(X_code_train, y):
 
@@ -1120,7 +1127,7 @@ for s in range(num_seeds):
             y = y_tr,
             validation_data=[x_val, y_val],
             callbacks=[early],
-            batch_size=512,
+            batch_size=1024,
             verbose=0,
             epochs=100
         )
@@ -1133,17 +1140,19 @@ for s in range(num_seeds):
         cv_pred += np.squeeze(model.predict(x_test_list))
 
     print("-----------------")
-    print("seed{}_mse: {}".format(s, f1_score(y, threshold(cv_train / (s + 1), th=0.5))))
+    print("seed{}_mse: {}".format(seed, f1_score(y, threshold(cv_train / (seed + 1), th=0.5))))
     print("-----------------")
 
-# -
 
+# +
 df_nn_pred = pd.DataFrame(cv_pred, columns=['target'])
 df_nn_pred.index.name = 'id'
+df_nn_pred.to_csv('nn_pred.csv')
+
 df_nn_train = pd.DataFrame(cv_train, columns=['target'])
 df_nn_train.index.name = 'id'
-
-s
+df_nn_train.to_csv('nn_train.csv')
+# -
 
 for i in range(30, 50):
     th = i/100
@@ -1367,8 +1376,8 @@ for col in contents_features:
     else:
         df_new['contents_new'] += df_test[col].astype(str) + '_'        
 
-df_new['person_new'] = df_new['person_new'].map(lambda x: u_person.get(x, 0))
-df_new['contents_new'] = df_new['contents_new'].map(lambda x: u_contents.get(x, 0))
+df_new['person_new'] = df_new['person_new'].map(lambda x: u_person.get(x, 1))
+df_new['contents_new'] = df_new['contents_new'].map(lambda x: u_contents.get(x, 1))
 
 #df_test_cnt = pd.concat([match_cols, diff_e, df_match_code, count_cols,  df_new], axis=1)
 df_test_cnt = pd.concat([count_cols,  df_new], axis=1)
@@ -1395,10 +1404,10 @@ df_test_emb = df_test.drop(drop_features + col_bin + col_code, axis=1).astype('i
 df_code_train = df_code_train.astype('int32')
 df_code_test = df_code_test.astype('int32')
 
-df_train_all = pd.concat([df_train_emb, df_code_train, df_train_cnt], axis=1).astype(float)
-df_test_all = pd.concat([df_test_emb, df_code_test, df_test_cnt], axis=1).astype(float)
+df_train_all = pd.concat([df_train_emb, df_code_train, df_train_cnt], axis=1)
+df_test_all = pd.concat([df_test_emb, df_code_test, df_test_cnt], axis=1)
 
-y = df_train['target'].copy().astype(float)
+y = df_train['target'].copy().astype('int32')
 X_train = df_train_all.values
 X_test = df_test_all.values
 
@@ -1445,23 +1454,23 @@ for i, d in enumerate(cat_dims):
 cat_emb_dims = list(cat_emb_dims.astype(int))
 
 # +
-clf = TabNetClassifier(n_d=64, n_a=64,
+clf = TabNetClassifier(n_d=16, n_a=16,
                        n_steps=3,
                        n_independent=4,
                        n_shared=4,
-                       gamma=1.2,
+                       gamma=1.1,
                        cat_idxs=cat_idxs,
                        cat_dims=cat_dims,
                        cat_emb_dim=cat_emb_dims,
                        optimizer_fn=torch.optim.Adam,
                        optimizer_params=dict(lr=2e-2),
-                       scheduler_params={"step_size":50,
+                       scheduler_params={"step_size":20,
                                          "gamma":0.9},
                        scheduler_fn=torch.optim.lr_scheduler.StepLR,
                        mask_type='entmax' # "sparsemax", entmax
                       )
 
-unsupervised_model = TabNetPretrainer(n_d=64, n_a=64,
+unsupervised_model = TabNetPretrainer(n_d=16, n_a=16,
                        n_steps=3,
                        n_independent=4,
                        n_shared=4,
@@ -1469,8 +1478,8 @@ unsupervised_model = TabNetPretrainer(n_d=64, n_a=64,
                        cat_dims=cat_dims,
                        cat_emb_dim=cat_emb_dims,
                        optimizer_fn=torch.optim.Adam,
-                       optimizer_params=dict(lr=1e-2),
-                       scheduler_params={"step_size":50,
+                       optimizer_params=dict(lr=1e-1),
+                       scheduler_params={"step_size":20,
                                          "gamma":0.9},
                        scheduler_fn=torch.optim.lr_scheduler.StepLR,
                        mask_type='entmax' # "sparsemax", entmax
@@ -1511,20 +1520,19 @@ clf.fit(
     eval_name=['train', 'valid'],
     eval_metric=['auc'],
     max_epochs=max_epochs , patience=5,
-    batch_size=2048, virtual_batch_size=128,
+    batch_size=2048, virtual_batch_size=64,
     num_workers=0,
     weights=1,
     drop_last=False,
-#    from_unsupervised=unsupervised_model
+    from_unsupervised=unsupervised_model
 )
-# -
-
-pred_train = clf.predict_proba(X_train)[:, 1]
 
 # +
-for i in range(30,50):
+train_p = clf.predict_proba(x_val)[:, 1]
+for i in range(20,50):
     th = i/100
-    print(th, f1_score(y, threshold(pred_train, th=th)))
+    p = threshold(train_p, th=th)
+    print(th, f1_score(y_val, p), (y_val == p).sum()/len(y_val))
 # 16 7056
 # 8 7048
 # 10 7028
@@ -1721,6 +1729,14 @@ df_cat_pred = pd.read_csv('catboost_pred.csv', index_col='id')
 cat_train = np.squeeze(df_cat_train.values)
 cat_pred = np.squeeze(df_cat_pred.values)
 
+y = df_train['target'].copy()
+
+t = cat_train/5
+for i in range(30,60):
+    th = i/100
+    p = threshold(t, th=th)
+    print(th, f1_score(y, p), (y == p).sum()/len(y))
+
 t = cv_train * 0.3 + (colab_train/6) * 0.3 + (cat_train/5) * 0.4
 for i in range(30,60):
     th = i/100
@@ -1735,3 +1751,73 @@ df_en_c_l.index.name = 'id'
 df_en_c_l.to_csv('en_cat_lgb.csv')
 
 df_en_c_l.describe()
+
+# ## ensemble
+
+# +
+df_nn_train = pd.read_csv('nn_train.csv', index_col='id')
+df_nn_pred = pd.read_csv('nn_pred.csv', index_col='id')
+
+df_cat_train = pd.read_csv('catboost_cv_train.csv', index_col='id')
+df_cat_pred = pd.read_csv('catboost_cv_pred.csv', index_col='id')
+
+df_lgb_train = pd.read_csv('lgb_cv_train.csv', index_col='id')
+df_lgb_pred = pd.read_csv('lgb_cv_pred.csv', index_col='id')
+
+df_tab_train = pd.read_csv('cv_tab_entmax_train.csv', index_col='id')
+df_tab_pred = pd.read_csv('cv_tab_entmax_test.csv', index_col='id')
+
+nn_train = np.squeeze(df_nn_train.values)
+nn_pred = np.squeeze(df_nn_pred.values) / 5
+
+cat_train = np.squeeze(df_cat_train.values)
+cat_pred = np.squeeze(df_cat_pred.values) / 5
+
+lgb_train = np.squeeze(df_lgb_train.values)
+lgb_pred = np.squeeze(df_lgb_pred.values)
+
+tab_train = np.squeeze(df_tab_train.values)
+tab_pred = np.squeeze(df_tab_pred.values) / 5
+
+
+# +
+from itertools import combinations
+
+train_list = [('nn', nn_train), ('cat', cat_train), ('lgb', lgb_train), ('tab', tab_train)]
+pred_list = [nn_pred, cat_pred, lgb_pred, tab_pred]
+
+train_com = list(combinations(train_list, 2))
+best_scores = []
+
+for i, (a, b) in enumerate(train_com):
+    print('-' * 30)
+    print(i)
+    print(a[0], b[0])
+    best_score = 0
+    for i in range(30, 50):
+        th = i / 100
+        p = threshold(a[1]/2 + b[1]/2, th=th)
+        score = f1_score(y, p)
+        if score > best_score:
+            best_score = score
+            best_th = th
+    best_scores.append((a[0], b[0], th, best_score))
+    
+best_scores
+
+# +
+t = tab_train * 0.05 + nn_train * 0.05 + cat_train * 0.8 + lgb_train * 0.1
+
+# tab 7108 6663 nn 7092 6647 cat 7008 6462 lgb 7075 6604 all 7082 6618
+for i in range(30, 50):
+    th = i / 100
+    p = threshold(t, th=th)
+    print(th, f1_score(y, p), (y == p).sum() / len(y))
+# -
+
+final_en = tab_pred * 0.05 + nn_pred * 0.05 + cat_pred * 0.8 + lgb_pred * 0.1
+df_final_en = pd.DataFrame(threshold(final_en, th=0.37), columns=['target'])
+df_final_en.index.name = 'id'
+df_final_en.describe()
+
+df_final_en.to_csv('final_en.csv')
